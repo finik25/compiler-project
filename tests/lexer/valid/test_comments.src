@@ -1,0 +1,6 @@
+// single line comment
+int x = 10; // trailing comment
+/* multi
+   line
+   comment */
+x++;

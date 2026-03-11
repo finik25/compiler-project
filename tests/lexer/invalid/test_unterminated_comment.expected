@@ -1,0 +1,3 @@
+1:1 ERROR "/* comment never ends
+x = 10;" 'Unterminated comment'
+2:8 END_OF_FILE ""

@@ -1,0 +1,4 @@
+1:1 STRING_LITERAL ""hello"" 'hello'
+2:1 STRING_LITERAL """" ''
+3:1 STRING_LITERAL ""string with spaces"" 'string with spaces'
+3:21 END_OF_FILE ""
