@@ -4,11 +4,10 @@ setup(
     name="minicompiler",
     version="0.1.0",
     description="Educational compiler for a C-like language",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    packages=find_packages(),  # включает src и все подпакеты
     entry_points={
         "console_scripts": [
-            "compiler = src.main:main",  # команда compiler вызовет main() из src/main.py
+            "compiler = src.main:main",
         ],
     },
     install_requires=[],

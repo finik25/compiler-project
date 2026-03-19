@@ -1,0 +1,6 @@
+char* str1 = "This is a string with // not a comment";
+char* str2 = "This /* is also not */ a comment";
+char* str3 = "Mixed // /* */ strings";
+
+int x = 42; 
+char* str4 = "Another // string";

@@ -1,0 +1,1 @@
+Error at tests/preprocessor/invalid/unterminated_comment.src:2:1: Unterminated multi-line comment

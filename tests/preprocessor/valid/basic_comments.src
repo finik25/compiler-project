@@ -1,0 +1,11 @@
+// This is a single line comment at start
+int main() {
+    // Declare variables
+    int x = 42;  // This is a comment after code
+    int y = 10;  /* This is a multi-line 
+                    comment that spans
+                    multiple lines */
+    /* Another comment */ int z = x + y;
+    return z;
+}
+// Comment at end of file

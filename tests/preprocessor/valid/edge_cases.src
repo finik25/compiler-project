@@ -1,0 +1,11 @@
+//// Multiple slashes
+int x = 42;//// No spaces
+int y = 10; /*comment*/ /*another*/ int z = 20;
+/*comment*/int a = 30;
+int b = 40;/*comment*/
+/*
+
+Empty comment
+
+*/
+int c = 50;
