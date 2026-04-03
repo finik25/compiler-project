@@ -39,6 +39,7 @@ class TokenType(Enum):
     GE = auto()         # '>='
     AND = auto()        # '&&'
     OR = auto()         # '||'
+    ARROW = auto()      # '->'
     INC_OP = auto()     # '++'
     DEC_OP = auto()     # '--'
     ADD_ASSIGN = auto() # '+='

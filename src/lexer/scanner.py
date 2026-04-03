@@ -113,6 +113,11 @@ class Scanner:
         if self.is_at_end():
             return self._make_token(TokenType.END_OF_FILE)
 
+        # Пропустить BOM в начале файла (U+FEFF)
+        if self.start == 0 and self.source.startswith('\ufeff'):
+            self.advance()  # пропускаем BOM
+            return self.scan_token()  # рекурсивно вызываем для следующего символа
+
         ch = self.advance()
 
         # Простые односимвольные токены
@@ -146,6 +151,9 @@ class Scanner:
             return self._make_token(TokenType.PLUS)
 
         if ch == '-':
+            if self.peek() == '>':  # стрелка ->
+                self.advance()
+                return self._make_token(TokenType.ARROW)
             if self.peek() == '-':
                 self.advance()
                 return self._make_token(TokenType.DEC_OP)

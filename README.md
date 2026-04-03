@@ -1,13 +1,14 @@
 ﻿# MiniCompiler
 
-**Учебный проект** по созданию компилятора для упрощённого C-подобного языка.  
+Учебный проект по созданию компилятора для упрощённого C-подобного языка.  
 Разрабатывается в рамках курса «Построение компиляторов» для изучения этапов трансляции: лексический, синтаксический и семантический анализ, генерация кода.
 
-**Текущий этап (Sprint 1):** Лексический анализатор (сканер) с полной диагностикой ошибок + препроцессор (удаление комментариев) как stretch goal.
+**Текущий этап (Sprint 2):** Синтаксический анализатор (парсер), строящий абстрактное синтаксическое дерево (AST) с поддержкой всех конструкций языка.
 
 ## Документация
 
 - [Спецификация языка](docs/language_spec.md) — формальное описание лексем в EBNF.
+- [Грамматика языка](src/parser/grammar.md) — полная LL(1)-грамматика в нотации EBNF.
 
 ---
 
@@ -55,26 +56,30 @@
    6:1 END_OF_FILE ""
    ```
 
-3. **Препроцессор** (опционально):
-   - Удаление комментариев с сохранением номеров строк.
-   - Запуск только препроцессора:
-     ```bash
-     compiler preprocess --input examples/hello.src --output cleaned.txt
-     ```
-   - Лексер с предобработкой:
-     ```bash
-     compiler lex --input examples/hello.src --preprocess
-     ```
-   - Просмотр результата препроцессора:
-     ```bash
-     compiler lex --input examples/hello.src --preprocess --show-preprocessed
-     ```
 
-4. **Запуск тестов**:
+3. **Запуск парсера с выводом AST**:
+   ```bash
+   compiler parse --input examples/hello.src --format text
+   ```
+   Поддерживаются форматы: `text`, `dot` (Graphviz), `json`.
+
+4. **Генерация графа AST** (требуется Graphviz):
+   ```bash
+   compiler parse --input examples/hello.src --format dot --output ast.dot
+   dot -Tpng ast.dot -o ast.png
+   ```
+
+5. **Препроцессор** (удаление комментариев):
+   ```bash
+   compiler preprocess --input examples/hello.src --output cleaned.txt
+   compiler lex --input examples/hello.src --preprocess
+   ```
+
+6. **Запуск тестов**:
    ```bash
    python -m pytest tests/ -v
    ```
-   Все тесты (22 штуки: 14 для лексера + 8 для препроцессора) должны проходить успешно.
+   Все тесты (29: лексер, препроцессор, парсер) должны проходить успешно.
 
 ---
 
@@ -83,35 +88,40 @@
 ```
 compiler-project/
 ├── docs/                          # Документация
-│   └── language_spec.md            # Спецификация языка
-├── examples/                       # Примеры исходного кода
+│   └── language_spec.md
+├── examples/                      # Примеры исходного кода
 │   └── hello.src
-├── src/                            # Исходный код компилятора
+├── src/                           # Исходный код
 │   ├── __init__.py
-│   ├── main.py                     # Точка входа CLI
-│   ├── lexer/                      # Лексический анализатор
-│   │   ├── __init__.py
-│   │   ├── scanner.py               # Сканер
-│   │   └── token.py                 # Определение токенов
-│   ├── preprocessor/                # Препроцессор (stretch goal)
-│   │   ├── __init__.py
+│   ├── main.py                    # CLI
+│   ├── lexer/                     # Лексический анализатор
+│   │   ├── scanner.py
+│   │   └── token.py
+│   ├── preprocessor/              # Препроцессор (stretch goal)
 │   │   └── preprocessor.py
-│   └── utils/                       # Вспомогательные модули (будущее)
-│       └── __init__.py
-├── tests/                           # Тесты
-│   ├── __init__.py
-│   ├── test_lexer.py                # Тесты лексера (9 тестов)
-│   ├── test_preprocessor.py          # Тесты препроцессора (8 тестов)
-│   └── preprocessor/                 # Входные файлы для препроцессора
-│       ├── valid/                    # Корректные входные файлы
-│       │   ├── *.src
-│       │   └── *.expected
-│       └── invalid/                  # Некорректные входные файлы
-│           └── *.src
+│   ├── parser/                    # Синтаксический анализатор (Sprint 2)
+│   │   ├── __init__.py
+│   │   ├── ast.py                 # Узлы AST
+│   │   ├── parser.py              # Рекурсивный спуск
+│   │   ├── ast_printer.py         # Текстовый вывод AST
+│   │   ├── ast_dot.py             # Генератор DOT
+│   │   ├── ast_json.py            # Генератор JSON
+│   │   └── grammar.md             # Формальная грамматика
+│   └── utils/                     # Вспомогательные модули (будущее)
+├── tests/                         # Тесты
+│   ├── test_lexer.py
+│   ├── test_preprocessor.py
+│   ├── test_parser.py
+│   ├── lexer/                     # Входные файлы для лексера
+│   ├── preprocessor/              # Входные файлы для препроцессора
+│   └── parser/                    # Входные файлы для парсера
+│       ├── valid/                 # Корректные программы
+│       └── invalid/               # Синтаксически неверные программы
 ├── .gitignore
-├── generate_expected.py             # Скрипт для перегенерации эталонов
+├── generate_expected.py           # Генерация эталонов для лексера/препроцессора
+├── generate_parser_expected.py    # Генерация эталонов для парсера
 ├── README.md
-└── setup.py                         # Установка пакета
+└── setup.py
 ```
 
 ---
@@ -120,5 +130,6 @@ compiler-project/
 
 - Python 3.8 или выше
 - pip
+- (опционально) Graphviz для визуализации AST
 - (опционально) виртуальное окружение
-```
+

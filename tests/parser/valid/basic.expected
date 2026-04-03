@@ -1,0 +1,15 @@
+Program:
+  FunctionDecl: add -> int
+    Parameters:
+      int a
+      int b
+    Body:
+      Block:
+        Return: (a PLUS b)
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: int x = 5
+        VarDecl: int y = 10
+        VarDecl: int z = add(x, y)
+        Return: z

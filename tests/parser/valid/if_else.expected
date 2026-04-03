@@ -1,0 +1,19 @@
+Program:
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: int a = 10
+        VarDecl: int b = 20
+        VarDecl: int max
+        IfStmt:
+          Condition:
+            (a GT b)
+          Then:
+            Block:
+              ExprStmt:
+                (max ASSIGN a)
+          Else:
+            Block:
+              ExprStmt:
+                (max ASSIGN b)
+        Return: max

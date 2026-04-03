@@ -1,0 +1,17 @@
+Program:
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: int a = 10
+        VarDecl: int b = 20
+        VarDecl: int c = (a PLUS (b STAR 2))
+        VarDecl: int d = ((a PLUS b) STAR 2)
+        VarDecl: bool e = ((a GT b) AND (c LT d))
+        VarDecl: int f = (MINUS a)
+        VarDecl: int g = (INC_OP a)
+        VarDecl: int h = (bDEC_OP)
+        ExprStmt:
+          (a ADD_ASSIGN 5)
+        ExprStmt:
+          (b MUL_ASSIGN 2)
+        Return: ((((((a PLUS b) PLUS c) PLUS d) PLUS f) PLUS g) PLUS h)

@@ -1,0 +1,10 @@
+Program:
+  StructDecl: Point
+    Fields:
+      VarDecl: int x
+      VarDecl: int y
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: struct Point p
+        Return: 0

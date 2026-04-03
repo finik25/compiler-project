@@ -1,0 +1,11 @@
+// Функции, параметры, возврат, вызовы
+fn add(int a, int b) -> int {
+    return a + b;
+}
+
+fn main() -> int {
+    int x = 5;
+    int y = 10;
+    int z = add(x, y);
+    return z;
+}

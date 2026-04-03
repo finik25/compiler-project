@@ -1,0 +1,11 @@
+fn main() -> int {
+    int a = 10;
+    int b = 20;
+    int max;
+    if (a > b) {
+        max = a;
+    } else {
+        max = b;
+    }
+    return max;
+}

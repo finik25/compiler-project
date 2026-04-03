@@ -1,0 +1,27 @@
+Program:
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: int sum = 0
+        VarDecl: int i = 0
+        WhileStmt:
+          Condition:
+            (i LT 10)
+          Body:
+            Block:
+              ExprStmt:
+                (sum ASSIGN (sum PLUS i))
+              ExprStmt:
+                (i ASSIGN (i PLUS 1))
+        ForStmt:
+          Init:
+            VarDecl: int j = 0
+          Condition:
+            (j LT 10)
+          Update:
+            (j ASSIGN (j PLUS 1))
+          Body:
+            Block:
+              ExprStmt:
+                (sum ASSIGN (sum PLUS j))
+        Return: sum

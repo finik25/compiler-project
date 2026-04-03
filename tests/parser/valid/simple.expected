@@ -1,0 +1,6 @@
+Program:
+  FunctionDecl: main -> int
+    Body:
+      Block:
+        VarDecl: int x = 10
+        Return: x
