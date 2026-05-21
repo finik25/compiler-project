@@ -1,0 +1,1 @@
+Semantic error: Assignment type mismatch: variable 'a' is 'int', expression is 'string' at 3:9

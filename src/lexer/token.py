@@ -17,6 +17,7 @@ class TokenType(Enum):
     KW_VOID = auto()
     KW_STRUCT = auto()
     KW_FN = auto()
+    KW_VAR = auto()
 
     # Identifiers & literals
     IDENTIFIER = auto()

@@ -31,6 +31,12 @@ class Parser:
             return Token(TokenType.END_OF_FILE, "", 0, 0)
         return self.tokens[self.current]
 
+    def peek_next(self) -> Token:
+        """Возвращает следующий токен (через один) без продвижения."""
+        if self.current + 1 >= len(self.tokens):
+            return Token(TokenType.END_OF_FILE, "", 0, 0)
+        return self.tokens[self.current + 1]
+
     def previous(self) -> Token:
         """Возвращает предыдущий токен (после вызова advance)."""
         return self.tokens[self.current - 1]
@@ -59,13 +65,14 @@ class Parser:
         """Потребляет токен ожидаемого типа или выбрасывает ошибку."""
         if self.check(token_type):
             return self.advance()
-        # Улучшаем сообщение об ошибке
         if token_type == TokenType.SEMICOLON:
             message += " (возможно, пропущена ';')"
         elif token_type == TokenType.RPAREN:
             message += " (возможно, пропущена ')')"
         elif token_type == TokenType.RBRACE:
             message += " (возможно, пропущена '}')"
+        elif token_type == TokenType.LBRACE:
+            message += " (возможно, пропущена '{')"
         error = ParseError(message, self.peek())
         self.errors.append(error)
         raise error
@@ -108,31 +115,28 @@ class Parser:
 
     def declaration(self) -> Optional[ASTNode]:
         try:
-            # Объявление функции
+            # Объявление переменной с выводом типа (var)
+            if self.match(TokenType.KW_VAR):
+                return self.var_declaration()
+
             if self.match(TokenType.KW_FN):
                 return self.function_declaration()
 
-            # Объявление структуры или переменной типа struct
             if self.match(TokenType.KW_STRUCT):
                 if not self.check(TokenType.IDENTIFIER):
                     raise ParseError("Ожидается имя структуры", self.peek())
-                # Смотрим, что идёт после идентификатора
-                next_token = self.tokens[self.current + 1] if self.current + 1 < len(self.tokens) else None
-                if next_token and next_token.type == TokenType.LBRACE:
-                    # Это объявление структуры
+                # безопасный предпросмотр
+                if self.peek_next().type == TokenType.LBRACE:
                     return self.struct_declaration()
                 else:
-                    # Это объявление переменной типа struct
-                    ident_token = self.advance()  # съедаем имя структуры
+                    ident_token = self.advance()
                     type_name = f"struct {ident_token.lexeme}"
                     return self.variable_declaration_with_type(type_name)
 
-            # Объявление переменной встроенного типа
             if self.match(TokenType.KW_INT, TokenType.KW_FLOAT, TokenType.KW_BOOL, TokenType.KW_VOID):
                 type_name = self.previous().lexeme
                 return self.variable_declaration_with_type(type_name)
 
-            # Иначе – оператор
             return self.statement()
         except ParseError:
             self.synchronize()
@@ -188,6 +192,8 @@ class Parser:
         return VarDeclNode(type_name, name, initializer, name_token.line, name_token.column)
 
     def type_name(self) -> str:
+        if self.check(TokenType.KW_VAR):
+            raise ParseError("'var' не является типом; используйте 'var' для объявления переменной с выводом типа", self.peek())
         if self.match(TokenType.KW_INT):
             return "int"
         if self.match(TokenType.KW_FLOAT):
@@ -440,3 +446,14 @@ class Parser:
         error = ParseError("Ожидается выражение", self.peek())
         self.errors.append(error)
         raise error
+
+    def var_declaration(self) -> VarDeclNode:
+        line = self.previous().line
+        column = self.previous().column
+        name_token = self.consume(TokenType.IDENTIFIER, "Ожидается имя переменной после 'var'")
+        name = name_token.lexeme
+        initializer = None
+        if self.match(TokenType.ASSIGN):
+            initializer = self.expression()
+        self.consume(TokenType.SEMICOLON, "Ожидается ';' после объявления переменной")
+        return VarDeclNode("var", name, initializer, line, column)

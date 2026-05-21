@@ -1,0 +1,8 @@
+Semantic analysis passed
+
+Symbol Table:
+Scope 0:
+  main (function) : int
+Scope 2:
+  a (variable) : int
+  b (variable) : int

@@ -204,7 +204,7 @@ class EmptyStmtNode(ASTNode):
 
 @dataclass
 class ExpressionNode(ASTNode):
-    """Базовый класс для всех выражений."""
+    """Базовый класс для всех выражений. Тип выражения будет добавлен динамически."""
     pass
 
 
@@ -224,6 +224,7 @@ class LiteralExprNode(ExpressionNode):
 class IdentifierExprNode(ExpressionNode):
     """Идентификатор (переменная, функция)."""
     name: str
+    symbol: Optional[Any] = None   # ссылка на Symbol из семантического анализа
 
     def __init__(self, name: str, line: int, column: int):
         super().__init__(NodeType.IDENTIFIER, line, column)
@@ -274,6 +275,7 @@ class CallExprNode(ExpressionNode):
     """Вызов функции."""
     callee: str
     arguments: List[ExpressionNode] = field(default_factory=list)
+    function_symbol: Optional[Any] = None   # ссылка на Symbol функции
 
     def __init__(self, callee: str, arguments: List[ExpressionNode], line: int, column: int):
         super().__init__(NodeType.CALL, line, column)

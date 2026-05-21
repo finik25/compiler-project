@@ -25,6 +25,7 @@ class Scanner:
             "void": TokenType.KW_VOID,
             "struct": TokenType.KW_STRUCT,
             "fn": TokenType.KW_FN,
+            "var": TokenType.KW_VAR,
         }
 
         # Карта двухсимвольных операторов (для справки, не используется напрямую)

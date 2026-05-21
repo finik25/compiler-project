@@ -1,0 +1,2 @@
+Semantic error: Type mismatch in initialization: expected 'bool', got 'int' at 2:10
+Semantic error: Type mismatch in binary operation 'PLUS': 'string' and 'int' at 6:13

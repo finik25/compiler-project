@@ -7,9 +7,9 @@ Program:
         VarDecl: int c = (a PLUS (b STAR 2))
         VarDecl: int d = ((a PLUS b) STAR 2)
         VarDecl: bool e = ((a GT b) AND (c LT d))
-        VarDecl: int f = (MINUS a)
-        VarDecl: int g = (INC_OP a)
-        VarDecl: int h = (bDEC_OP)
+        VarDecl: int f = (-a)
+        VarDecl: int g = (++a)
+        VarDecl: int h = (b--)
         ExprStmt:
           (a ADD_ASSIGN 5)
         ExprStmt:

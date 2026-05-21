@@ -110,6 +110,9 @@ class Preprocessor:
         self.source = '\n'.join(processed_lines)
 
     def _remove_multi_line_comments(self):
+        # При удалении многострочного комментария:
+        # - все символы внутри комментария игнорируются, кроме '\n'
+        # - это сохраняет нумерацию строк для последующего лексера
         result = []
         i = 0
         in_comment = False
