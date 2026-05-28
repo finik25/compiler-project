@@ -1,0 +1,6 @@
+function main: int ()
+  entry:
+    t1 = MOVE 5
+    t2 = MOVE 3
+    t3 = ADD t1, t2
+    RETURN t3

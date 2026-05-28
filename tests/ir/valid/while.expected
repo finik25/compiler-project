@@ -1,0 +1,15 @@
+function main: int ()
+  entry:
+    t1 = MOVE 0
+    t2 = MOVE 0
+  loop1:
+    t3 = CMP_LT t1, 10
+    JUMP_IF_NOT t3, endwhile2
+  body3:
+    t4 = ADD t2, t1
+    t2 = MOVE t4
+    t5 = ADD t1, 1
+    t1 = MOVE t5
+    JUMP loop1
+  endwhile2:
+    RETURN t2

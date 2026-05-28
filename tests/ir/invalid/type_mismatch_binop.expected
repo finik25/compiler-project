@@ -1,0 +1,1 @@
+Semantic error: Type mismatch in binary operation 'PLUS': 'int' and 'bool' at 4:12

@@ -188,12 +188,14 @@ class SemanticAnalyzer:
         elif isinstance(expr, IdentifierExprNode):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
+                # Вставляем error-символ, чтобы избежать повторных ошибок
+                error_sym = Symbol(expr.name, SymbolKind.VARIABLE, "error", expr.line, expr.column)
+                self.symbol_table.insert(expr.name, error_sym)
                 self.errors.append(SemanticError(f"Undeclared identifier '{expr.name}'", expr.line, expr.column))
                 expr.type_annotation = "error"
                 return "error"
             expr.symbol = sym
             expr.type_annotation = sym.type_name
-            # Если символ имеет тип "error", не генерируем новую ошибку
             return sym.type_name
 
         elif isinstance(expr, BinaryExprNode):
@@ -279,7 +281,11 @@ class SemanticAnalyzer:
         elif isinstance(expr, AssignmentExprNode):
             target_sym = self.symbol_table.lookup(expr.target)
             if not target_sym:
-                self.errors.append(SemanticError(f"Assignment to undeclared variable '{expr.target}'", expr.line, expr.column))
+                # Вставляем error-символ
+                error_sym = Symbol(expr.target, SymbolKind.VARIABLE, "error", expr.line, expr.column)
+                self.symbol_table.insert(expr.target, error_sym)
+                self.errors.append(
+                    SemanticError(f"Assignment to undeclared variable '{expr.target}'", expr.line, expr.column))
                 expr.type_annotation = "error"
                 return "error"
             right_type = self._analyze_expression(expr.value)

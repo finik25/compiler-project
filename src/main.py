@@ -1,3 +1,4 @@
+import json
 import sys
 import argparse
 import os
@@ -39,6 +40,14 @@ def main():
     check_parser.add_argument("--input", required=True, help="Input source file")
     check_parser.add_argument("--verbose", action="store_true", help="Show symbol table and decorated AST")
     check_parser.add_argument("--output", help="Output file for errors or report (optional)")
+
+    # IR command
+    ir_parser = subparsers.add_parser("ir", help="Generate Intermediate Representation (IR)")
+    ir_parser.add_argument("--input", required=True, help="Input source file")
+    ir_parser.add_argument("--output", help="Output file (default: stdout)")
+    ir_parser.add_argument("--format", choices=["text", "dot", "json"], default="text", help="IR output format")
+    ir_parser.add_argument("--stats", action="store_true", help="Show IR statistics")
+    ir_parser.add_argument("--verbose", action="store_true", help="Show additional info")
 
     args = parser.parse_args()
 
@@ -184,6 +193,92 @@ def main():
             else:
                 print(report)
 
+    elif args.command == "ir":
+        try:
+            with open(args.input, 'r', encoding='utf-8-sig') as f:
+                source = f.read()
+        except FileNotFoundError:
+            print(f"Error: file '{args.input}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        # Лексический анализ
+        scanner = Scanner(source)
+        tokens = []
+        while not scanner.is_at_end():
+            tokens.append(scanner.next_token())
+        tokens.append(scanner.next_token())
+
+        # Парсинг
+        parser = Parser(tokens)
+        ast = parser.parse()
+        if parser.errors:
+            for err in parser.errors:
+                print(f"Syntax error: {err}", file=sys.stderr)
+            sys.exit(1)
+
+        # Семантический анализ (нужен для типов и символьной таблицы)
+        analyzer = SemanticAnalyzer()
+        symtable, errors = analyzer.analyze(ast)
+        if errors:
+            for err in errors:
+                print(f"Semantic error: {err.message} at {err.line}:{err.column}", file=sys.stderr)
+            sys.exit(1)
+
+        # Генерация IR
+        from src.ir import IRGenerator, IRPrinter, IRDotGenerator
+        ir_gen = IRGenerator(symtable)
+        program_ir = ir_gen.generate(ast)
+
+        if args.verbose:
+            # Выводим расширенную информацию (локальные переменные, etc.)
+            printer = IRPrinter(verbose=True)
+        else:
+            printer = IRPrinter(verbose=False)
+
+        if args.stats:
+            total_instr = 0
+            total_blocks = 0
+            total_temps = 0
+            for func in program_ir.functions:
+                total_blocks += len(func.blocks)
+                total_temps += func.temp_counter
+                for blk in func.blocks:
+                    total_instr += len(blk.instructions)
+            stats = (
+                f"IR Statistics:\n"
+                f"  Functions: {len(program_ir.functions)}\n"
+                f"  Basic blocks: {total_blocks}\n"
+                f"  Instructions: {total_instr}\n"
+                f"  Temporaries: {total_temps}"
+            )
+            if args.output:
+                with open(args.output, 'w', encoding='utf-8') as f:
+                    f.write(stats)
+            else:
+                print(stats)
+            if not args.output and args.format != "text":
+                # Если запрошена статистика и другой формат, выводим её в stderr
+                print(stats, file=sys.stderr)
+
+        # Форматирование вывода
+        if args.format == "text":
+            printer = IRPrinter(verbose=args.verbose)
+            output = printer.print_program(program_ir)
+        elif args.format == "dot":
+            dot_gen = IRDotGenerator()
+            output = dot_gen.generate(program_ir)
+        elif args.format == "json":
+            from src.ir.ir_json import IRJSONGenerator
+            json_gen = IRJSONGenerator()
+            output = json_gen.generate(program_ir)
+        else:
+            output = ""
+
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(output)
+        else:
+            print(output)
 
 if __name__ == "__main__":
     main()

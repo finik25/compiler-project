@@ -1,0 +1,16 @@
+function main: int ()
+  entry:
+    t1 = MOVE 0
+    t2 = MOVE 0
+  for_cond1:
+    t3 = CMP_LT t2, 10
+    JUMP_IF_NOT t3, for_end4
+  for_body2:
+    t4 = ADD t1, t2
+    t1 = MOVE t4
+  for_step3:
+    t5 = ADD t2, 1
+    t2 = MOVE t5
+    JUMP for_cond1
+  for_end4:
+    RETURN t1

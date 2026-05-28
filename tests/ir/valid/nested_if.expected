@@ -1,0 +1,24 @@
+function main: int ()
+  entry:
+    t1 = MOVE 10
+    t2 = MOVE 20
+    t3 = MOVE 0
+    t4 = CMP_GT t1, 5
+    JUMP_IF_NOT t4, else1
+  then3:
+    t5 = CMP_LT t2, 30
+    JUMP_IF_NOT t5, else4
+  then6:
+    t3 = MOVE 100
+    JUMP endif5
+  else4:
+    t3 = MOVE 200
+    JUMP endif5
+  endif5:
+    JUMP endif2
+  else1:
+    t3 = MOVE 0
+    JUMP endif2
+  endif2:
+    RETURN t3
+

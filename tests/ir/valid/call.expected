@@ -1,0 +1,13 @@
+function add: int (a, b)
+  entry:
+    t3 = ADD t1, t2
+    RETURN t3
+
+function main: int ()
+  entry:
+    t1 = MOVE 5
+    t2 = MOVE 3
+    PARAM t1
+    PARAM t2
+    t3 = CALL add(t1, t2)
+    RETURN t3

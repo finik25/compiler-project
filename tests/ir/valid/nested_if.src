@@ -1,0 +1,15 @@
+fn main() -> int {
+    int x = 10;
+    int y = 20;
+    int z;
+    if (x > 5) {
+        if (y < 30) {
+            z = 100;
+        } else {
+            z = 200;
+        }
+    } else {
+        z = 0;
+    }
+    return z;
+}
