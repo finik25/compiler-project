@@ -9,9 +9,10 @@ from src.lexer.token import TokenType
 class SemanticAnalyzer:
     def __init__(self):
         self.symbol_table = SymbolTable()
-        self.errors: List[SemanticError] = []
-        self.current_function: Optional[Symbol] = None
+        self.errors = []
+        self.current_function = None
         self.in_loop = False
+        self._register_runtime_functions()   # <-- добавляем
 
     def analyze(self, program: ProgramNode):
         # Первый проход: регистрация глобальных объявлений
@@ -83,6 +84,23 @@ class SemanticAnalyzer:
             return
         var_sym = Symbol(node.name, SymbolKind.VARIABLE, node.type_name, node.line, node.column)
         self.symbol_table.insert(node.name, var_sym)
+
+    def _register_runtime_functions(self):
+        """Регистрирует встроенные функции runtime (print_int, exit, print_char)."""
+        # print_int: void (int)
+        print_int_sym = Symbol("print_int", SymbolKind.FUNCTION, "void", 0, 0)
+        print_int_sym.params = [Symbol("value", SymbolKind.PARAMETER, "int", 0, 0)]
+        self.symbol_table.insert("print_int", print_int_sym)
+
+        # exit: void (int)
+        exit_sym = Symbol("exit", SymbolKind.FUNCTION, "void", 0, 0)
+        exit_sym.params = [Symbol("code", SymbolKind.PARAMETER, "int", 0, 0)]
+        self.symbol_table.insert("exit", exit_sym)
+
+        # print_char: void (int)
+        print_char_sym = Symbol("print_char", SymbolKind.FUNCTION, "void", 0, 0)
+        print_char_sym.params = [Symbol("ch", SymbolKind.PARAMETER, "int", 0, 0)]
+        self.symbol_table.insert("print_char", print_char_sym)
 
     # ---------- Второй проход: анализ тел ----------
     def _analyze_function(self, node: FunctionDeclNode):

@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import argparse
 import os
@@ -48,6 +49,15 @@ def main():
     ir_parser.add_argument("--format", choices=["text", "dot", "json"], default="text", help="IR output format")
     ir_parser.add_argument("--stats", action="store_true", help="Show IR statistics")
     ir_parser.add_argument("--verbose", action="store_true", help="Show additional info")
+
+    # Compile command
+    compile_parser = subparsers.add_parser("compile", help="Generate x86-64 assembly and executable")
+    compile_parser.add_argument("--input", required=True, help="Input source file")
+    compile_parser.add_argument("--output", default="a.asm", help="Output assembly file (default: a.asm)")
+    compile_parser.add_argument("--no-regalloc", action="store_true",
+                                help="Disable register allocation (use stack only)")
+    compile_parser.add_argument("--run", action="store_true",
+                                help="Assemble, link and run the program (requires nasm and ld)")
 
     args = parser.parse_args()
 
@@ -279,6 +289,86 @@ def main():
                 f.write(output)
         else:
             print(output)
+
+    elif args.command == "compile":
+        try:
+            with open(args.input, 'r', encoding='utf-8-sig') as f:
+                source = f.read()
+        except FileNotFoundError:
+            print(f"Error: file '{args.input}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        # Лексический анализ
+        scanner = Scanner(source)
+        tokens = []
+        while not scanner.is_at_end():
+            tokens.append(scanner.next_token())
+        tokens.append(scanner.next_token())
+
+        # Парсинг
+        parser = Parser(tokens)
+        ast = parser.parse()
+        if parser.errors:
+            for err in parser.errors:
+                print(f"Syntax error: {err}", file=sys.stderr)
+            sys.exit(1)
+
+        # Семантический анализ
+        analyzer = SemanticAnalyzer()
+        symtable, errors = analyzer.analyze(ast)
+        if errors:
+            for err in errors:
+                print(f"Semantic error: {err.message} at {err.line}:{err.column}", file=sys.stderr)
+            sys.exit(1)
+
+        # Генерация IR
+        from src.ir import IRGenerator
+        ir_gen = IRGenerator(symtable)
+        program_ir = ir_gen.generate(ast)
+
+        # Генерация ассемблера
+        from src.codegen import X86Generator
+        gen = X86Generator(enable_regalloc=not args.no_regalloc)
+        asm_code = gen.generate(program_ir)
+
+        # Запись файла
+        try:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(asm_code)
+            print(f"Assembly written to {args.output}")
+        except Exception as e:
+            print(f"Error writing file: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if args.run:
+            # Проверяем наличие nasm и ld/gcc
+            import shutil
+            nasm_path = shutil.which("nasm")
+            if not nasm_path:
+                print("Error: nasm not found in PATH. Please install NASM.", file=sys.stderr)
+                sys.exit(1)
+            # Используем gcc для линковки (удобнее на Windows)
+            linker = shutil.which("gcc") or shutil.which("ld")
+            if not linker:
+                print("Error: neither gcc nor ld found in PATH.", file=sys.stderr)
+                sys.exit(1)
+
+            base = os.path.splitext(args.output)[0]
+            obj = base + ".o"
+            exe = base + ".exe" if sys.platform == "win32" else base
+
+            # Ассемблируем
+            subprocess.run([nasm_path, "-f", "elf64", args.output, "-o", obj], check=True)
+            # Линкуем (используем gcc, чтобы автоматически подключить libc, если нужно)
+            if "gcc" in linker:
+                subprocess.run([linker, "-no-pie", "-o", exe, obj], check=True)
+            else:
+                subprocess.run([linker, "-o", exe, obj], check=True)
+
+            # Запускаем
+            print(f"Running {exe}...")
+            result = subprocess.run(["./" + exe], capture_output=False, text=False)
+            sys.exit(result.returncode)
 
 if __name__ == "__main__":
     main()
