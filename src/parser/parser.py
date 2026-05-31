@@ -133,8 +133,12 @@ class Parser:
                     type_name = f"struct {ident_token.lexeme}"
                     return self.variable_declaration_with_type(type_name)
 
-            if self.match(TokenType.KW_INT, TokenType.KW_FLOAT, TokenType.KW_BOOL, TokenType.KW_VOID):
-                type_name = self.previous().lexeme
+            # Обработка обычных типов (включая unsigned)
+            if self.match(TokenType.KW_INT, TokenType.KW_FLOAT, TokenType.KW_BOOL, TokenType.KW_VOID,
+                          TokenType.KW_UNSIGNED):
+                # Откатываемся назад на один токен, чтобы type_name() могла обработать
+                self.current -= 1
+                type_name = self.type_name()
                 return self.variable_declaration_with_type(type_name)
 
             return self.statement()
@@ -194,6 +198,9 @@ class Parser:
     def type_name(self) -> str:
         if self.check(TokenType.KW_VAR):
             raise ParseError("'var' не является типом; используйте 'var' для объявления переменной с выводом типа", self.peek())
+        if self.match(TokenType.KW_UNSIGNED):
+            self.consume(TokenType.KW_INT, "Expected 'int' after 'unsigned'")
+            return "unsigned int"
         if self.match(TokenType.KW_INT):
             return "int"
         if self.match(TokenType.KW_FLOAT):

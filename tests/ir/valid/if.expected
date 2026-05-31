@@ -1,11 +1,11 @@
 function main: int ()
   entry:
     t1 = MOVE 10
-    t2 = CMP_GT t1, 5
-    JUMP_IF_NOT t2, else1
-  then3:
+    # if binary at 3:9
+BR_GT t1, 5
+    JUMP else2
+  then1:
     RETURN 1
-  else1:
+  else2:
     RETURN 0
-  endif2:
-
+  endif3:

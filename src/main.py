@@ -239,6 +239,11 @@ def main():
         ir_gen = IRGenerator(symtable)
         program_ir = ir_gen.generate(ast)
 
+        # Генерация ассемблера
+        from src.codegen import X86Generator
+        gen = X86Generator(enable_regalloc=not args.no_regalloc)
+        asm_code = gen.generate(program_ir, globals=ir_gen.globals)  # передаём globals
+
         if args.verbose:
             # Выводим расширенную информацию (локальные переменные, etc.)
             printer = IRPrinter(verbose=True)
@@ -325,11 +330,11 @@ def main():
         from src.ir import IRGenerator
         ir_gen = IRGenerator(symtable)
         program_ir = ir_gen.generate(ast)
-
+        globals_dict = ir_gen.globals
         # Генерация ассемблера
         from src.codegen import X86Generator
         gen = X86Generator(enable_regalloc=not args.no_regalloc)
-        asm_code = gen.generate(program_ir)
+        asm_code = gen.generate(program_ir, globals=globals_dict)
 
         # Запись файла
         try:

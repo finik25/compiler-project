@@ -24,13 +24,15 @@ class SemanticAnalyzer:
             elif isinstance(decl, VarDeclNode):
                 self._register_global_variable(decl)
 
-        # Второй проход: анализ тел функций и инициализаторов глобальных переменных
-        for decl in program.declarations:
-            if isinstance(decl, FunctionDeclNode):
-                self._analyze_function(decl)
+        # Второй проход: анализ инициализаторов глобальных переменных (вывод типов для var)
         for decl in program.declarations:
             if isinstance(decl, VarDeclNode) and decl.initializer:
                 self._analyze_global_initializer(decl)
+
+        # Третий проход: анализ тел функций
+        for decl in program.declarations:
+            if isinstance(decl, FunctionDeclNode):
+                self._analyze_function(decl)
 
         return self.symbol_table, self.errors
 
@@ -82,8 +84,11 @@ class SemanticAnalyzer:
         if existing:
             self.errors.append(SemanticError(f"Duplicate global variable '{node.name}'", node.line, node.column))
             return
+        # Для var временно сохраняем тип "var", позже выведем из инициализатора
         var_sym = Symbol(node.name, SymbolKind.VARIABLE, node.type_name, node.line, node.column)
         self.symbol_table.insert(node.name, var_sym)
+        # Запоминаем узел для последующего вывода типа (если нужен)
+        # Можно добавить словарь global_var_nodes, но проще обработать в _analyze_global_initializer
 
     def _register_runtime_functions(self):
         """Регистрирует встроенные функции runtime (print_int, exit, print_char)."""
@@ -391,12 +396,25 @@ class SemanticAnalyzer:
                 ))
 
     def _analyze_global_initializer(self, node: VarDeclNode):
-        # Аналогично локальной переменной, но без создания новой области
+        # Анализируем инициализатор
         init_type = self._analyze_expression(node.initializer)
         if init_type == "error":
             return
-        if not is_compatible(node.type_name, init_type):
-            self.errors.append(SemanticError(
-                f"Global variable initializer type mismatch: expected '{node.type_name}', got '{init_type}'",
-                node.line, node.column
-            ))
+
+        sym = self.symbol_table.lookup(node.name)
+        if not sym:
+            self.errors.append(SemanticError(f"Global variable '{node.name}' not found", node.line, node.column))
+            return
+
+        if node.type_name == "var":
+            if init_type == "error":
+                return
+            # Выводим тип
+            sym.type_name = init_type
+            node.type_name = init_type
+        else:
+            if not is_compatible(node.type_name, init_type):
+                self.errors.append(SemanticError(
+                    f"Global variable initializer type mismatch: expected '{node.type_name}', got '{init_type}'",
+                    node.line, node.column
+                ))

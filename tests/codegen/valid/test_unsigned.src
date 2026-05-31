@@ -1,0 +1,5 @@
+fn main() -> int {
+    unsigned int x = 5;
+    unsigned int y = 10;
+    if (x > y) { return 1; } else { return 0; }
+}

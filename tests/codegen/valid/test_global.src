@@ -1,0 +1,5 @@
+int g = 100;
+fn main() -> int {
+    g = g + 1;
+    return g;
+}

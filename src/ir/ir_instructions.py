@@ -19,6 +19,7 @@ class Operand:
     kind: OperandType
     value: Any                     # значение: int, str, или номер временной
     type_name: Optional[str] = None  # "int", "float", "bool", "void", "string"
+    is_unsigned: bool = False  # новое поле
 
     def __str__(self) -> str:
         if self.kind == OperandType.TEMP:
@@ -33,8 +34,8 @@ class Operand:
             return self.value
 
     @staticmethod
-    def temp(index: int, type_name: Optional[str] = None) -> 'Operand':
-        return Operand(OperandType.TEMP, index, type_name)
+    def temp(index: int, type_name: Optional[str] = None, is_unsigned: bool = False) -> 'Operand':
+        return Operand(OperandType.TEMP, index, type_name, is_unsigned)
 
     @staticmethod
     def const(value: Any, type_name: Optional[str] = None) -> 'Operand':
@@ -48,8 +49,8 @@ class Operand:
             return Operand(OperandType.LABEL, f"L{name}")
 
     @staticmethod
-    def symbol(name: str, type_name: Optional[str] = None) -> 'Operand':
-        return Operand(OperandType.SYMBOL, name, type_name)
+    def symbol(name: str, type_name: Optional[str] = None, is_unsigned: bool = False) -> 'Operand':
+        return Operand(OperandType.SYMBOL, name, type_name, is_unsigned)
 
 
 class Opcode(Enum):
@@ -96,6 +97,18 @@ class Opcode(Enum):
     PARAM = "PARAM"
     PHI = "PHI"
 
+    # Новые условные переходы (прямые)
+    BR_EQ = "BR_EQ"
+    BR_NE = "BR_NE"
+    BR_LT = "BR_LT"
+    BR_LE = "BR_LE"
+    BR_GT = "BR_GT"
+    BR_GE = "BR_GE"
+    BR_ULT = "BR_ULT"  # беззнаковое <
+    BR_ULE = "BR_ULE"  # беззнаковое <=
+    BR_UGT = "BR_UGT"  # беззнаковое >
+    BR_UGE = "BR_UGE"  # беззнаковое >=
+
 
 @dataclass
 class Instruction:
@@ -107,6 +120,7 @@ class Instruction:
     label: Optional[str] = None        # для LABEL, JUMP, JUMP_IF
     args: List[Operand] = field(default_factory=list)  # для CALL, PHI
     comment: Optional[str] = None
+    is_unsigned: bool = False
 
     def __str__(self) -> str:
         parts = []
@@ -177,8 +191,8 @@ class Instruction:
         return Instruction(Opcode.MOVE, dest=dest, src1=src)
 
     @staticmethod
-    def binary(op: Opcode, dest: Operand, left: Operand, right: Operand) -> 'Instruction':
-        return Instruction(op, dest=dest, src1=left, src2=right)
+    def binary(op: Opcode, dest: Operand, left: Operand, right: Operand, is_unsigned: bool = False) -> 'Instruction':
+        return Instruction(op, dest=dest, src1=left, src2=right, is_unsigned=is_unsigned)
 
     @staticmethod
     def unary(op: Opcode, dest: Operand, src: Operand) -> 'Instruction':
@@ -229,9 +243,9 @@ class FunctionIR:
     label_counter: int = 0               # новый счётчик для меток
     var_map: Dict[str, Operand] = field(default_factory=dict)
 
-    def new_temp(self, type_name: str = "int") -> Operand:
+    def new_temp(self, type_name: str = "int", is_unsigned: bool = False) -> Operand:
         self.temp_counter += 1
-        return Operand.temp(self.temp_counter, type_name)
+        return Operand.temp(self.temp_counter, type_name, is_unsigned)
 
     def new_label(self, prefix: str = "L") -> str:
         """Создаёт новую уникальную метку в пределах функции."""

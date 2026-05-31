@@ -2,6 +2,9 @@ Semantic analysis passed
 
 Symbol Table:
 Scope 0:
+  print_int (function) : void
+  exit (function) : void
+  print_char (function) : void
   main (function) : int
 Scope 2:
   a (variable) : int

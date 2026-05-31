@@ -26,6 +26,7 @@ class Scanner:
             "struct": TokenType.KW_STRUCT,
             "fn": TokenType.KW_FN,
             "var": TokenType.KW_VAR,
+            "unsigned": TokenType.KW_UNSIGNED,
         }
 
         # Карта двухсимвольных операторов (для справки, не используется напрямую)

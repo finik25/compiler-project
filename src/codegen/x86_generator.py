@@ -1,18 +1,27 @@
 # src/codegen/x86_generator.py
-
 from typing import List, Optional
-from src.ir.ir_instructions import ProgramIR, FunctionIR, BasicBlock, Instruction, Operand, OperandType, Opcode
-from src.codegen.abi import ARG_REGS, RET_REG, SYS_WRITE, SYS_EXIT, STDOUT
+from src.ir.ir_instructions import ProgramIR, FunctionIR, Instruction, Operand, OperandType, Opcode
+from src.codegen.abi import ARG_REGS, RET_REG
 from src.codegen.stack_frame import StackFrameManager
 
 class X86Generator:
-    def __init__(self, enable_regalloc: bool = False):  # пока отключаем регистровую аллокацию
+    def __init__(self, enable_regalloc: bool = True):
         self.enable_regalloc = enable_regalloc
         self.current_func: Optional[FunctionIR] = None
         self.stack_mgr: Optional[StackFrameManager] = None
 
-    def generate(self, program: ProgramIR) -> str:
+    def generate(self, program: ProgramIR, globals: dict = None) -> str:
         lines = []
+        if globals:
+            lines.append("section .data")
+            for name, (typ, init) in globals.items():
+                if init is not None:
+                    lines.append(f"    {name}: dq {init}")
+            lines.append("section .bss")
+            for name, (typ, init) in globals.items():
+                if init is None:
+                    lines.append(f"    {name}: resq 1")
+            lines.append("")
         lines.append("section .text")
         lines.append("global main")
         lines.append("")
@@ -32,15 +41,12 @@ class X86Generator:
 
         lines = []
         lines.append(f"{func.name}:")
-        # Пролог
         lines.append("    push rbp")
         lines.append("    mov rbp, rsp")
         lines.append(f"    sub rsp, {self.stack_mgr.total_size}")
 
-        # Сохраняем параметры из регистров в слоты соответствующих временных
         param_regs = ARG_REGS[:len(func.parameters)]
         for idx, param_name in enumerate(func.parameters):
-            # Находим временную, связанную с параметром
             temp_op = func.var_map.get(param_name)
             if temp_op and temp_op.kind == OperandType.TEMP:
                 temp_index = temp_op.value
@@ -49,13 +55,11 @@ class X86Generator:
                 if reg:
                     lines.append(f"    mov [rbp{offset:+d}], {reg}")
 
-        # Генерация кода для блоков
         for block in func.blocks:
             lines.append(f".{block.label}:")
             for instr in block.instructions:
                 lines.extend(self._gen_instruction(instr))
 
-        # Добавляем эпилог, если в функции нет RETURN
         has_return = any(
             instr.opcode == Opcode.RETURN
             for blk in func.blocks
@@ -77,16 +81,21 @@ class X86Generator:
             lines.extend(self._gen_move(instr.dest, instr.src1))
         elif instr.opcode in (Opcode.ADD, Opcode.SUB, Opcode.MUL, Opcode.DIV,
                               Opcode.AND, Opcode.OR, Opcode.XOR):
-            lines.extend(self._gen_binary(instr.opcode, instr.dest, instr.src1, instr.src2))
+            lines.extend(self._gen_binary(instr.opcode, instr.dest, instr.src1, instr.src2, instr.is_unsigned))
         elif instr.opcode in (Opcode.CMP_EQ, Opcode.CMP_NE, Opcode.CMP_LT, Opcode.CMP_LE,
                               Opcode.CMP_GT, Opcode.CMP_GE):
-            lines.extend(self._gen_compare(instr.opcode, instr.dest, instr.src1, instr.src2))
+            lines.extend(self._gen_compare(instr.opcode, instr.dest, instr.src1, instr.src2, instr.is_unsigned))
         elif instr.opcode == Opcode.JUMP:
             lines.append(f"    jmp .{instr.label}")
         elif instr.opcode == Opcode.JUMP_IF:
             lines.extend(self._gen_jump_cond(instr.src1, instr.label, True))
         elif instr.opcode == Opcode.JUMP_IF_NOT:
             lines.extend(self._gen_jump_cond(instr.src1, instr.label, False))
+        # Прямые условные переходы
+        elif instr.opcode in (Opcode.BR_EQ, Opcode.BR_NE, Opcode.BR_LT, Opcode.BR_LE,
+                              Opcode.BR_GT, Opcode.BR_GE, Opcode.BR_ULT, Opcode.BR_ULE,
+                              Opcode.BR_UGT, Opcode.BR_UGE):
+            lines.extend(self._gen_cond_branch(instr))
         elif instr.opcode == Opcode.CALL:
             lines.extend(self._gen_call(instr))
         elif instr.opcode == Opcode.RETURN:
@@ -101,51 +110,89 @@ class X86Generator:
         lines = []
         if dest.kind == OperandType.TEMP:
             offset = self.stack_mgr.get_temp_offset(dest.value)
-            # Загружаем src в rax и сохраняем в стек
             lines.extend(self._gen_load_into_reg(src, 'rax'))
             lines.append(f"    mov [rbp{offset:+d}], rax")
+        elif dest.kind == OperandType.SYMBOL:
+            lines.extend(self._gen_load_into_reg(src, 'rax'))
+            lines.append(f"    mov [rel {dest.value}], rax")
         return lines
 
-    def _gen_binary(self, opcode: Opcode, dest: Operand, left: Operand, right: Operand) -> List[str]:
+    def _gen_binary(self, opcode: Opcode, dest: Operand, left: Operand, right: Operand, is_unsigned: bool = False) -> List[str]:
         lines = []
-        # Результат будем накапливать в rax
         lines.extend(self._gen_load_into_reg(left, 'rax'))
         lines.extend(self._gen_load_into_reg(right, 'rbx'))
-
         if opcode == Opcode.DIV:
             lines.append("    xor rdx, rdx")
-            lines.append("    div rbx")      # rax = rax / rbx (беззнаковое)
+            if is_unsigned:
+                lines.append("    div rbx")
+            else:
+                lines.append("    idiv rbx")
         elif opcode == Opcode.MUL:
-            lines.append("    imul rax, rbx")
+            if is_unsigned:
+                lines.append("    mul rbx")
+            else:
+                lines.append("    imul rax, rbx")
         else:
             asm_op = self._opcode_to_asm(opcode)
             lines.append(f"    {asm_op} rax, rbx")
-
-        # Сохраняем результат в dest
         if dest.kind == OperandType.TEMP:
             offset = self.stack_mgr.get_temp_offset(dest.value)
             lines.append(f"    mov [rbp{offset:+d}], rax")
         return lines
 
-    def _gen_compare(self, opcode: Opcode, dest: Operand, left: Operand, right: Operand) -> List[str]:
+    def _gen_compare(self, opcode: Opcode, dest: Operand, left: Operand, right: Operand, is_unsigned: bool = False) -> List[str]:
         lines = []
         lines.extend(self._gen_load_into_reg(left, 'rax'))
         lines.extend(self._gen_load_into_reg(right, 'rbx'))
         lines.append(f"    cmp rax, rbx")
-        setcc_map = {
-            Opcode.CMP_EQ: 'sete',
-            Opcode.CMP_NE: 'setne',
-            Opcode.CMP_LT: 'setl',
-            Opcode.CMP_LE: 'setle',
-            Opcode.CMP_GT: 'setg',
-            Opcode.CMP_GE: 'setge',
-        }
+        if is_unsigned:
+            setcc_map = {
+                Opcode.CMP_EQ: 'sete',
+                Opcode.CMP_NE: 'setne',
+                Opcode.CMP_LT: 'setb',
+                Opcode.CMP_LE: 'setbe',
+                Opcode.CMP_GT: 'seta',
+                Opcode.CMP_GE: 'setae',
+            }
+        else:
+            setcc_map = {
+                Opcode.CMP_EQ: 'sete',
+                Opcode.CMP_NE: 'setne',
+                Opcode.CMP_LT: 'setl',
+                Opcode.CMP_LE: 'setle',
+                Opcode.CMP_GT: 'setg',
+                Opcode.CMP_GE: 'setge',
+            }
         setcc = setcc_map.get(opcode, 'sete')
         lines.append(f"    {setcc} al")
         lines.append("    movzx rax, al")
         if dest.kind == OperandType.TEMP:
             offset = self.stack_mgr.get_temp_offset(dest.value)
             lines.append(f"    mov [rbp{offset:+d}], rax")
+        return lines
+
+    def _gen_cond_branch(self, instr: Instruction) -> List[str]:
+        """Генерирует код для прямого условного перехода BR_*."""
+        lines = []
+        # Загружаем операнды
+        lines.extend(self._gen_load_into_reg(instr.src1, 'rax'))
+        lines.extend(self._gen_load_into_reg(instr.src2, 'rbx'))
+        lines.append("    cmp rax, rbx")
+        # Выбираем ассемблерный мнемоник
+        asm_jcc = {
+            Opcode.BR_EQ: 'je',
+            Opcode.BR_NE: 'jne',
+            Opcode.BR_LT: 'jl',
+            Opcode.BR_LE: 'jle',
+            Opcode.BR_GT: 'jg',
+            Opcode.BR_GE: 'jge',
+            Opcode.BR_ULT: 'jb',
+            Opcode.BR_ULE: 'jbe',
+            Opcode.BR_UGT: 'ja',
+            Opcode.BR_UGE: 'jae',
+        }[instr.opcode]
+        lines.append(f"    {asm_jcc} .{instr.label}")
+        # Безусловный переход на false_label будет следующей инструкцией (JUMP)
         return lines
 
     def _gen_jump_cond(self, cond: Operand, label: str, jump_if_true: bool) -> List[str]:
@@ -160,16 +207,11 @@ class X86Generator:
 
     def _gen_call(self, instr: Instruction) -> List[str]:
         lines = []
-        # Сохраняем caller-saved регистры (rax, rcx, rdx, rsi, rdi, r8-r11) – упрощённо: ничего не сохраняем,
-        # так как все переменные у нас на стеке. Но нужно сохранять регистры, которые могут быть использованы
-        # для аргументов (rdi, rsi, rdx, rcx, r8, r9) – они будут перезаписаны.
-        # Поскольку мы не используем регистры для хранения переменных, достаточно просто установить аргументы.
-
         args = instr.args
-        arg_regs = ARG_REGS[:len(args)]
+        arg_regs_list = ARG_REGS[:len(args)]
         for i, arg in enumerate(args):
-            if i < len(arg_regs):
-                lines.extend(self._gen_load_into_reg(arg, arg_regs[i]))
+            if i < len(arg_regs_list):
+                lines.extend(self._gen_load_into_reg(arg, arg_regs_list[i]))
         lines.append(f"    call {instr.label}")
         if instr.dest and instr.dest.kind == OperandType.TEMP:
             offset = self.stack_mgr.get_temp_offset(instr.dest.value)

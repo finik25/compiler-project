@@ -40,14 +40,26 @@ def run_codegen_test(src_path: Path, expected_file: Path):
 def test_arith():
     run_codegen_test(CODEGEN_VALID / "test_arith.src", CODEGEN_VALID / "test_arith.expected")
 
-
 def test_if():
     run_codegen_test(CODEGEN_VALID / "test_if.src", CODEGEN_VALID / "test_if.expected")
-
 
 def test_while():
     run_codegen_test(CODEGEN_VALID / "test_while.src", CODEGEN_VALID / "test_while.expected")
 
+def test_global():
+    run_codegen_test(CODEGEN_VALID / "test_global.src", CODEGEN_VALID / "test_global.expected")
+
+def test_short_circuit_and():
+    run_codegen_test(CODEGEN_VALID / "test_short_circuit_and.src", CODEGEN_VALID / "test_short_circuit_and.expected")
+
+def test_short_circuit_or():
+    run_codegen_test(CODEGEN_VALID / "test_short_circuit_or.src", CODEGEN_VALID / "test_short_circuit_or.expected")
+
+def test_unsigned():
+    run_codegen_test(CODEGEN_VALID / "test_unsigned.src", CODEGEN_VALID / "test_unsigned.expected")
 '''
+def test_short_circuit_simple():
+    run_codegen_test(CODEGEN_VALID / "test_short_circuit_simple.src", CODEGEN_VALID / "test_short_circuit_simple.expected")
+
 def test_print():
     run_codegen_test(CODEGEN_VALID / "test_print.src", CODEGEN_VALID / "test_print.expected")'''

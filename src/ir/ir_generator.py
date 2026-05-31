@@ -1,5 +1,4 @@
 """Генерация IR из декорированного AST."""
-
 from typing import Dict, List, Optional
 from src.parser.ast import *
 from src.semantic.symbol_table import SymbolTable, Symbol, SymbolKind
@@ -8,27 +7,31 @@ from src.lexer.token import TokenType
 
 
 class IRGenerator:
-    """Преобразует AST в трёхадресный код (IR) с базовыми блоками."""
-
     def __init__(self, symbol_table: SymbolTable):
+        self.globals: Dict[str, Tuple[str, Optional[int]]] = {}
         self.symbol_table = symbol_table
         self.current_function: Optional[FunctionIR] = None
         self.program_ir = ProgramIR(functions=[])
         self._current_block: Optional[BasicBlock] = None
-        self._loop_stack: List[str] = []  # для break/continue (пока не используется)
+        self._loop_stack: List[str] = []
 
     def generate(self, program: ProgramNode) -> ProgramIR:
-        """Главный метод: обход AST и создание ProgramIR."""
+        self.globals = {}
+        for decl in program.declarations:
+            if isinstance(decl, VarDeclNode):
+                self._register_global(decl)
         for decl in program.declarations:
             if isinstance(decl, FunctionDeclNode):
                 self._gen_function(decl)
         return self.program_ir
 
-    # --------------------------------------------------------------------------
-    # Вспомогательные методы
-    # --------------------------------------------------------------------------
+    def _register_global(self, node: VarDeclNode):
+        init_val = None
+        if node.initializer and isinstance(node.initializer, LiteralExprNode):
+            init_val = node.initializer.value
+        self.globals[node.name] = (node.type_name, init_val)
+
     def _add_block(self, label: str) -> BasicBlock:
-        """Создаёт и добавляет блок в текущую функцию, возвращает его."""
         block = BasicBlock(label=label)
         self.current_function.add_block(block)
         return block
@@ -42,15 +45,14 @@ class IRGenerator:
         self._current_block.add_instruction(instr)
 
     def _block_ends_with_terminator(self, block: BasicBlock) -> bool:
-        """Проверяет, заканчивается ли блок управляющей инструкцией."""
         if not block.instructions:
             return False
         last = block.instructions[-1]
-        return last.opcode in (Opcode.RETURN, Opcode.JUMP, Opcode.JUMP_IF, Opcode.JUMP_IF_NOT)
+        return last.opcode in (Opcode.RETURN, Opcode.JUMP, Opcode.JUMP_IF, Opcode.JUMP_IF_NOT,
+                               Opcode.BR_EQ, Opcode.BR_NE, Opcode.BR_LT, Opcode.BR_LE,
+                               Opcode.BR_GT, Opcode.BR_GE, Opcode.BR_ULT, Opcode.BR_ULE,
+                               Opcode.BR_UGT, Opcode.BR_UGE)
 
-    # --------------------------------------------------------------------------
-    # Генерация функций
-    # --------------------------------------------------------------------------
     def _gen_function(self, node: FunctionDeclNode):
         func_ir = FunctionIR(
             name=node.name,
@@ -61,25 +63,18 @@ class IRGenerator:
         )
         self.current_function = func_ir
         self.program_ir.functions.append(func_ir)
-
-        # Словарь для отображения локальных переменных на временные
         func_ir.var_map = {}
-
-        # Входной базовый блок (фиксированная метка "entry")
         entry_block = self._add_block("entry")
         self._set_current_block(entry_block)
 
-        # Параметры: создаём временные переменные для каждого параметра
         for param in node.parameters:
             func_ir.var_types[param.name] = param.type_name
             temp = func_ir.new_temp(param.type_name)
             func_ir.var_map[param.name] = temp
 
-        # Генерация тела функции
         if node.body:
             self._gen_statement(node.body, func_ir.return_type)
 
-        # Если функция не закончилась RETURN, добавим фиктивный (для void или ошибка)
         has_return = any(
             instr.opcode == Opcode.RETURN
             for block in func_ir.blocks
@@ -91,15 +86,10 @@ class IRGenerator:
             else:
                 self._emit(Instruction.ret())
 
-        # Построение CFG
         self._build_cfg(func_ir)
-
         self.current_function = None
         self._current_block = None
 
-    # --------------------------------------------------------------------------
-    # Генерация операторов
-    # --------------------------------------------------------------------------
     def _gen_statement(self, stmt: ASTNode, expected_return_type: Optional[str] = None):
         if isinstance(stmt, BlockStmtNode):
             for s in stmt.statements:
@@ -127,79 +117,138 @@ class IRGenerator:
             if node.initializer:
                 value = self._gen_expression(node.initializer)
                 if value and value.kind == OperandType.TEMP:
-                    # Переиспользуем временную переменную
                     self.current_function.var_map[node.name] = value
                 else:
                     temp = self.current_function.new_temp(node.type_name)
                     self._emit(Instruction.move(temp, value))
                     self.current_function.var_map[node.name] = temp
             else:
-                # Неинициализированная переменная: инициализируем нулём
                 temp = self.current_function.new_temp(node.type_name)
                 self._emit(Instruction.move(temp, Operand.const(0, node.type_name)))
                 self.current_function.var_map[node.name] = temp
-        else:
-            # Глобальная переменная – пока игнорируем
-            pass
+
+    # ---------- Прямые условные переходы для реляционных выражений ----------
+    def _gen_cond_branch(self, expr: ExpressionNode, true_label: str, false_label: str) -> bool:
+        """
+        Генерирует прямой условный переход для простого реляционного выражения.
+        Возвращает True, если переход сгенерирован, иначе False.
+        """
+        if not isinstance(expr, BinaryExprNode):
+            return False
+        op = expr.operator
+        if op not in (TokenType.LT, TokenType.LE, TokenType.GT, TokenType.GE,
+                      TokenType.EQ, TokenType.NE):
+            return False
+
+        left = self._gen_expression(expr.left)
+        right = self._gen_expression(expr.right)
+        if left is None or right is None:
+            return False
+
+        # Определяем беззнаковость
+        is_unsigned = (expr.left.type_annotation == "unsigned int" or
+                       expr.right.type_annotation == "unsigned int")
+
+        # Выбираем опкод
+        br_op = None
+        if op == TokenType.LT:
+            br_op = Opcode.BR_ULT if is_unsigned else Opcode.BR_LT
+        elif op == TokenType.LE:
+            br_op = Opcode.BR_ULE if is_unsigned else Opcode.BR_LE
+        elif op == TokenType.GT:
+            br_op = Opcode.BR_UGT if is_unsigned else Opcode.BR_GT
+        elif op == TokenType.GE:
+            br_op = Opcode.BR_UGE if is_unsigned else Opcode.BR_GE
+        elif op == TokenType.EQ:
+            br_op = Opcode.BR_EQ
+        elif op == TokenType.NE:
+            br_op = Opcode.BR_NE
+
+        if br_op is None:
+            return False
+
+        # Генерируем BR_* с переходом на true_label
+        self._emit(Instruction(opcode=br_op, src1=left, src2=right, label=true_label,
+                               comment=f"if {expr}"))
+        # После BR_* безусловный переход на false_label
+        self._emit(Instruction.jump(false_label))
+        return True
+
+    def _gen_condition(self, expr: ExpressionNode, true_label: str, false_label: str) -> None:
+        """Генерирует код для условия, переходящий на true_label при истинности, иначе на false_label."""
+        # Логические операторы с коротким замыканием
+        if isinstance(expr, BinaryExprNode) and expr.operator in (TokenType.AND, TokenType.OR):
+            self._gen_logical_condition(expr, true_label, false_label)
+            return
+        # Унарное отрицание
+        if isinstance(expr, UnaryExprNode) and expr.operator == TokenType.NOT:
+            self._gen_condition(expr.operand, false_label, true_label)
+            return
+        # Прямой переход для реляционных выражений
+        if self._gen_cond_branch(expr, true_label, false_label):
+            return
+        # Общий случай: вычисляем значение и проверяем ноль
+        val = self._gen_expression(expr)
+        self._emit(Instruction.jump_if_not(val, false_label))
+        self._emit(Instruction.jump(true_label))
+
+    def _gen_logical_condition(self, expr: BinaryExprNode, true_label: str, false_label: str) -> None:
+        """Генерирует короткое замыкание для && и ||."""
+        if expr.operator == TokenType.AND:
+            next_label = self.current_function.new_label("and_next")
+            self._gen_condition(expr.left, next_label, false_label)
+            # Создаём блок для правой части И переключаемся на него
+            self._add_block(next_label)
+            self._set_current_block(self.current_function.get_block(next_label))
+            self._gen_condition(expr.right, true_label, false_label)
+        else:  # OR
+            next_label = self.current_function.new_label("or_next")
+            self._gen_condition(expr.left, true_label, next_label)
+            self._add_block(next_label)
+            self._set_current_block(self.current_function.get_block(next_label))
+            self._gen_condition(expr.right, true_label, false_label)
 
     def _gen_if(self, node: IfStmtNode, expected_return_type: Optional[str] = None):
-        cond = self._gen_expression(node.condition)
+        then_label = self.current_function.new_label("then")
         else_label = self.current_function.new_label("else") if node.else_branch else None
         end_label = self.current_function.new_label("endif")
-        need_end = False  # флаг, нужен ли блок endif
 
-        if else_label:
-            self._emit(Instruction.jump_if_not(cond, else_label))
-        else:
-            self._emit(Instruction.jump_if_not(cond, end_label))
-            need_end = True  # если нет else, то безусловный переход на endif нужен
+        self._gen_condition(node.condition, then_label, else_label or end_label)
 
-        # Then блок
-        then_label = self.current_function.new_label("then")
-        then_block = self._add_block(then_label)
-        self._set_current_block(then_block)
+        self._add_block(then_label)
+        self._set_current_block(self.current_function.get_block(then_label))
         self._gen_statement(node.then_branch, expected_return_type)
         if not self._block_ends_with_terminator(self._current_block):
             self._emit(Instruction.jump(end_label))
-            need_end = True
 
-        # Else блок (если есть)
         if node.else_branch:
-            else_block = self._add_block(else_label)
-            self._set_current_block(else_block)
+            self._add_block(else_label)
+            self._set_current_block(self.current_function.get_block(else_label))
             self._gen_statement(node.else_branch, expected_return_type)
             if not self._block_ends_with_terminator(self._current_block):
                 self._emit(Instruction.jump(end_label))
-                need_end = True
 
-        # Создаём блок endif, только если он нужен
-        if need_end:
-            self._add_block(end_label)
-            self._set_current_block(self.current_function.get_block(end_label))
+        self._add_block(end_label)
+        self._set_current_block(self.current_function.get_block(end_label))
 
     def _gen_while(self, node: WhileStmtNode, expected_return_type: Optional[str] = None):
         loop_label = self.current_function.new_label("loop")
         end_label = self.current_function.new_label("endwhile")
+        body_label = self.current_function.new_label("body")
 
-        # Блок условия (начало цикла)
         cond_block = self._add_block(loop_label)
         self._set_current_block(cond_block)
-        cond = self._gen_expression(node.condition)
-        self._emit(Instruction.jump_if_not(cond, end_label))
+        self._gen_condition(node.condition, body_label, end_label)
 
-        # Тело цикла
-        body_label = self.current_function.new_label("body")
-        body_block = self._add_block(body_label)
-        self._set_current_block(body_block)
+        self._add_block(body_label)
+        self._set_current_block(self.current_function.get_block(body_label))
         self._gen_statement(node.body, expected_return_type)
         self._emit(Instruction.jump(loop_label))
 
-        # Блок выхода
         self._add_block(end_label)
         self._set_current_block(self.current_function.get_block(end_label))
 
     def _gen_for(self, node: ForStmtNode, expected_return_type: Optional[str] = None):
-        # Инициализация
         if node.init:
             if isinstance(node.init, VarDeclNode):
                 self._gen_var_decl(node.init)
@@ -213,27 +262,24 @@ class IRGenerator:
         step_label = self.current_function.new_label("for_step")
         end_label = self.current_function.new_label("for_end")
 
-        # Блок условия
         cond_block = self._add_block(loop_label)
         self._set_current_block(cond_block)
         if node.condition:
-            cond = self._gen_expression(node.condition)
-            self._emit(Instruction.jump_if_not(cond, end_label))
-        # если условия нет – бесконечный цикл
+            self._gen_condition(node.condition, body_label, end_label)
+        else:
+            # Если нет условия, бесконечный цикл
+            self._emit(Instruction.jump(body_label))
 
-        # Тело
         body_block = self._add_block(body_label)
         self._set_current_block(body_block)
         self._gen_statement(node.body, expected_return_type)
 
-        # Шаг (update)
         step_block = self._add_block(step_label)
         self._set_current_block(step_block)
         if node.update:
             self._gen_expression(node.update)
         self._emit(Instruction.jump(loop_label))
 
-        # Блок выхода
         self._add_block(end_label)
         self._set_current_block(self.current_function.get_block(end_label))
 
@@ -244,9 +290,6 @@ class IRGenerator:
         else:
             self._emit(Instruction.ret())
 
-    # --------------------------------------------------------------------------
-    # Генерация выражений
-    # --------------------------------------------------------------------------
     def _gen_expression(self, expr: ExpressionNode) -> Optional[Operand]:
         if isinstance(expr, LiteralExprNode):
             if expr.literal_type in (TokenType.INT_LITERAL, TokenType.KW_TRUE, TokenType.KW_FALSE):
@@ -267,10 +310,13 @@ class IRGenerator:
                 return self.current_function.var_map[expr.name]
             sym = self.symbol_table.lookup(expr.name)
             if sym:
-                return Operand.symbol(expr.name, sym.type_name)
+                is_unsigned = sym.type_name == "unsigned int"
+                return Operand.symbol(expr.name, sym.type_name, is_unsigned=is_unsigned)
             raise RuntimeError(f"Undeclared variable {expr.name}")
 
         elif isinstance(expr, BinaryExprNode):
+            if expr.operator in (TokenType.AND, TokenType.OR):
+                return self._gen_logical_expr(expr)
             left = self._gen_expression(expr.left)
             right = self._gen_expression(expr.right)
             dest = self.current_function.new_temp(expr.type_annotation)
@@ -280,8 +326,6 @@ class IRGenerator:
                 TokenType.STAR: Opcode.MUL,
                 TokenType.SLASH: Opcode.DIV,
                 TokenType.PERCENT: Opcode.MOD,
-                TokenType.AND: Opcode.AND,
-                TokenType.OR: Opcode.OR,
                 TokenType.EQ: Opcode.CMP_EQ,
                 TokenType.NE: Opcode.CMP_NE,
                 TokenType.LT: Opcode.CMP_LT,
@@ -292,13 +336,17 @@ class IRGenerator:
             op = op_map.get(expr.operator)
             if op is None:
                 raise NotImplementedError(f"Binary operator {expr.operator}")
-            self._emit(Instruction.binary(op, dest, left, right))
+            # Для сравнений определяем беззнаковость
+            if op in (Opcode.CMP_EQ, Opcode.CMP_NE, Opcode.CMP_LT, Opcode.CMP_LE, Opcode.CMP_GT, Opcode.CMP_GE):
+                is_unsigned = (expr.left.type_annotation == "unsigned int" or expr.right.type_annotation == "unsigned int")
+            else:
+                is_unsigned = (expr.type_annotation == "unsigned int")
+            self._emit(Instruction.binary(op, dest, left, right, is_unsigned=is_unsigned))
             return dest
 
         elif isinstance(expr, UnaryExprNode):
             operand = self._gen_expression(expr.operand)
             if expr.operator in (TokenType.INC_OP, TokenType.DEC_OP):
-                # префиксный ++/--
                 new_val = self.current_function.new_temp(expr.type_annotation)
                 if expr.operator == TokenType.INC_OP:
                     self._emit(Instruction.binary(Opcode.ADD, new_val, operand, Operand.const(1, "int")))
@@ -338,7 +386,6 @@ class IRGenerator:
                 if sym is None:
                     raise RuntimeError(f"Undeclared variable {expr.target}")
                 dest = Operand.symbol(expr.target, sym.type_name)
-
             if expr.operator != TokenType.ASSIGN:
                 loaded = self.current_function.new_temp(expr.value.type_annotation)
                 self._emit(Instruction.load(loaded, dest))
@@ -375,11 +422,36 @@ class IRGenerator:
         else:
             raise NotImplementedError(f"Expression type {type(expr)}")
 
-    # --------------------------------------------------------------------------
-    # Построение CFG (Control Flow Graph)
-    # --------------------------------------------------------------------------
+    def _gen_logical_expr(self, expr: BinaryExprNode) -> Operand:
+        """Генерирует код для логического выражения && или ||, возвращая значение (0/1)."""
+        dest = self.current_function.new_temp("bool")
+        true_label = self.current_function.new_label("logical_true")
+        false_label = self.current_function.new_label("logical_false")
+        end_label = self.current_function.new_label("logical_end")
+        zero = Operand.const(0, "bool")
+        one = Operand.const(1, "bool")
+        self._emit(Instruction.move(dest, zero))
+        if expr.operator == TokenType.AND:
+            # Короткая реализация через условные переходы
+            left_val = self._gen_expression(expr.left)
+            self._emit(Instruction.jump_if_not(left_val, end_label))
+            right_val = self._gen_expression(expr.right)
+            self._emit(Instruction.jump_if_not(right_val, end_label))
+            self._emit(Instruction.move(dest, one))
+        else:  # OR
+            left_val = self._gen_expression(expr.left)
+            self._emit(Instruction.jump_if_not(left_val, false_label))
+            self._emit(Instruction.move(dest, one))
+            self._emit(Instruction.jump(end_label))
+            self._add_block(false_label)
+            right_val = self._gen_expression(expr.right)
+            self._emit(Instruction.jump_if_not(right_val, end_label))
+            self._emit(Instruction.move(dest, one))
+        self._emit(Instruction.jump(end_label))
+        self._add_block(end_label)
+        return dest
+
     def _build_cfg(self, func: FunctionIR):
-        """Заполняет predecessors и successors для всех блоков функции."""
         block_map = {b.label: b for b in func.blocks}
         for i, block in enumerate(func.blocks):
             if not block.instructions:
@@ -390,13 +462,18 @@ class IRGenerator:
                 targets.append(last.label)
             elif last.opcode in (Opcode.JUMP_IF, Opcode.JUMP_IF_NOT):
                 targets.append(last.label)
-                # fallthrough: следующий блок в списке (если есть) тоже successor
+                if i + 1 < len(func.blocks):
+                    targets.append(func.blocks[i+1].label)
+            elif last.opcode in (Opcode.BR_EQ, Opcode.BR_NE, Opcode.BR_LT, Opcode.BR_LE,
+                                 Opcode.BR_GT, Opcode.BR_GE, Opcode.BR_ULT, Opcode.BR_ULE,
+                                 Opcode.BR_UGT, Opcode.BR_UGE):
+                targets.append(last.label)
+                # После BR_* всегда следует JUMP на false_label, поэтому добавляем его
                 if i + 1 < len(func.blocks):
                     targets.append(func.blocks[i+1].label)
             elif last.opcode == Opcode.RETURN:
                 targets = []
             else:
-                # Если нет управляющей инструкции, следующий блок (не должно случаться)
                 if i + 1 < len(func.blocks):
                     targets.append(func.blocks[i+1].label)
 

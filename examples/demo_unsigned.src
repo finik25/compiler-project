@@ -1,0 +1,9 @@
+fn main() -> int {
+    unsigned int u = 4000000000;  // больше 2^31-1
+    unsigned int v = 3000000000;
+    if (u > v) {
+        return 1;
+    } else {
+        return 0;
+    }
+}

@@ -1,0 +1,10 @@
+fn main() -> int {
+    int a = 1;
+    int b = 5;
+    // Если a != 0, то деление не выполняется
+    if (a == 0 || (b / a) > 2) {
+        return 1;
+    } else {
+        return 0;
+    }
+}

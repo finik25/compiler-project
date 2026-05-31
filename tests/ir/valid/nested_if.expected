@@ -3,22 +3,23 @@ function main: int ()
     t1 = MOVE 10
     t2 = MOVE 20
     t3 = MOVE 0
-    t4 = CMP_GT t1, 5
-    JUMP_IF_NOT t4, else1
-  then3:
-    t5 = CMP_LT t2, 30
-    JUMP_IF_NOT t5, else4
-  then6:
+    # if binary at 5:9
+BR_GT t1, 5
+    JUMP else2
+  then1:
+    # if binary at 6:13
+BR_LT t2, 30
+    JUMP else5
+  then4:
     t3 = MOVE 100
-    JUMP endif5
-  else4:
+    JUMP endif6
+  else5:
     t3 = MOVE 200
-    JUMP endif5
-  endif5:
-    JUMP endif2
-  else1:
+    JUMP endif6
+  endif6:
+    JUMP endif3
+  else2:
     t3 = MOVE 0
-    JUMP endif2
-  endif2:
+    JUMP endif3
+  endif3:
     RETURN t3
-

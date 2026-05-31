@@ -1,65 +1,44 @@
 from typing import List, Dict, Set, Tuple
-from src.ir.ir_instructions import Instruction, BasicBlock, Operand, OperandType
+from src.ir.ir_instructions import FunctionIR, BasicBlock, Instruction, Operand, OperandType
 
-class LiveInterval:
-    """Интервал жизни временной переменной внутри базового блока."""
-    def __init__(self, temp_index: int, start: int, end: int):
-        self.temp = temp_index
-        self.start = start   # индекс инструкции, где определена
-        self.end = end       # индекс последнего использования (включительно)
+def compute_live_vars(func: FunctionIR) -> Dict[int, Tuple[Set[int], Set[int]]]:
+    blocks = func.blocks
+    num_blocks = len(blocks)
 
-def compute_live_intervals(block: BasicBlock) -> List[LiveInterval]:
-    """
-    Вычисляет интервалы жизни для каждой временной переменной в пределах одного блока.
-    Возвращает список LiveInterval.
-    """
-    # Проход 1: определить для каждой инструкции, какие temp используются и определяются
-    uses: Dict[int, Set[int]] = {}   # индекс инструкции -> set temp_index
-    defs: Dict[int, Set[int]] = {}   # индекс инструкции -> set temp_index
-    all_temps = set()
+    # Индексы successor'ов
+    succ_indices = []
+    for block in blocks:
+        indices = [blocks.index(succ) for succ in block.successors if succ in blocks]
+        succ_indices.append(indices)
 
-    for idx, instr in enumerate(block.instructions):
-        uses[idx] = set()
-        defs[idx] = set()
+    defs = [set() for _ in range(num_blocks)]
+    uses = [set() for _ in range(num_blocks)]
 
-        def add_operand(op: Operand):
-            if op and op.kind == OperandType.TEMP:
-                all_temps.add(op.value)
-                uses[idx].add(op.value)
-
-        # Обработка разных типов инструкций
-        if instr.opcode.value in ('MOVE', 'LOAD'):
+    for idx, block in enumerate(blocks):
+        for instr in block.instructions:
             if instr.dest and instr.dest.kind == OperandType.TEMP:
                 defs[idx].add(instr.dest.value)
-            if instr.src1:
-                add_operand(instr.src1)
-        elif instr.opcode.value in ('ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR',
-                                    'CMP_EQ', 'CMP_NE', 'CMP_LT', 'CMP_LE', 'CMP_GT', 'CMP_GE'):
-            if instr.dest and instr.dest.kind == OperandType.TEMP:
-                defs[idx].add(instr.dest.value)
-            add_operand(instr.src1)
-            add_operand(instr.src2)
-        elif instr.opcode.value in ('JUMP_IF', 'JUMP_IF_NOT'):
-            add_operand(instr.src1)
-        elif instr.opcode.value == 'CALL':
-            if instr.dest and instr.dest.kind == OperandType.TEMP:
-                defs[idx].add(instr.dest.value)
-            for arg in instr.args:
-                add_operand(arg)
-        # RETURN, JUMP, LABEL, PARAM, PHI игнорируем (в RETURN src1 может быть temp)
-        elif instr.opcode.value == 'RETURN':
-            add_operand(instr.src1)
+            for op in [instr.src1, instr.src2] + instr.args:
+                if op and op.kind == OperandType.TEMP:
+                    uses[idx].add(op.value)
 
-    # Проход 2: для каждого temp определить start (первое определение) и end (последнее использование)
-    intervals = []
-    for temp in all_temps:
-        start = None
-        end = -1
-        for idx in range(len(block.instructions)):
-            if temp in defs[idx]:
-                start = idx
-            if temp in uses[idx]:
-                end = idx
-        if start is not None:
-            intervals.append(LiveInterval(temp, start, end))
-    return intervals
+    live_in = [set() for _ in range(num_blocks)]
+    live_out = [set() for _ in range(num_blocks)]
+
+    changed = True
+    while changed:
+        changed = False
+        for idx in range(num_blocks):
+            new_out = set()
+            for succ_idx in succ_indices[idx]:
+                new_out.update(live_in[succ_idx])
+            if new_out != live_out[idx]:
+                live_out[idx] = new_out
+                changed = True
+
+            new_in = uses[idx].union(live_out[idx].difference(defs[idx]))
+            if new_in != live_in[idx]:
+                live_in[idx] = new_in
+                changed = True
+
+    return {i: (live_in[i], live_out[i]) for i in range(num_blocks)}

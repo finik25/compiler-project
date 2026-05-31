@@ -1,8 +1,6 @@
-# src/codegen/register_allocator.py
-
 from typing import Dict, List, Set, Optional, Tuple
-from src.ir.ir_instructions import FunctionIR, BasicBlock, Opcode, OperandType
-from src.codegen.liveness import compute_live_intervals, LiveInterval
+from src.ir.ir_instructions import FunctionIR, BasicBlock, OperandType
+from src.codegen.liveness import compute_live_vars
 from src.codegen.abi import TEMP_REGS
 
 class RegisterAllocator:
@@ -12,85 +10,94 @@ class RegisterAllocator:
         self.phys_regs = TEMP_REGS[:self.num_regs]
 
     def allocate(self) -> Tuple[Dict[int, Optional[str]], Dict[int, bool]]:
-        mapping: Dict[int, Optional[str]] = {}
-        is_spilled: Dict[int, bool] = {}
+        # Анализ живых переменных – возвращает словарь индекс блока -> (live_in, live_out)
+        live_info = compute_live_vars(self.func)
+        blocks = self.func.blocks
+        num_blocks = len(blocks)
 
-        # Определяем межблочные временные
-        temp_blocks: Dict[int, Set[str]] = {}
-        for block in self.func.blocks:
+        # Собираем всех временных
+        all_temps = set()
+        for block in blocks:
             for instr in block.instructions:
-                for op in self._collect_operands(instr):
-                    if op.kind == OperandType.TEMP:
-                        temp_blocks.setdefault(op.value, set()).add(block.label)
+                for op in [instr.dest, instr.src1, instr.src2] + instr.args:
+                    if op and op.kind == OperandType.TEMP:
+                        all_temps.add(op.value)
 
-        # Принудительно спиллим временные, которые встречаются в нескольких блоках
-        multi_block_temps = {temp for temp, blocks in temp_blocks.items() if len(blocks) > 1}
-        for temp in multi_block_temps:
-            mapping[temp] = None
-            is_spilled[temp] = True
+        # Для каждого временного определим первый и последний блок
+        first_block: Dict[int, int] = {}
+        last_block: Dict[int, int] = {}
+        for temp in all_temps:
+            first = num_blocks
+            last = -1
+            for idx, block in enumerate(blocks):
+                live_in, live_out = live_info[idx]
+                if temp in live_in or temp in live_out:
+                    first = min(first, idx)
+                    last = max(last, idx)
+                # также проверяем, определён ли temp в блоке
+                for instr in block.instructions:
+                    if instr.dest and instr.dest.kind == OperandType.TEMP and instr.dest.value == temp:
+                        first = min(first, idx)
+                        last = max(last, idx)
+            first_block[temp] = first
+            last_block[temp] = last
 
-        # Для каждого блока выполняем локальную аллокацию (только для временных, которые не multi-block)
-        for block in self.func.blocks:
-            intervals = compute_live_intervals(block)
-            # Отфильтруем интервалы для уже спиленных временных
-            intervals = [iv for iv in intervals if iv.temp not in multi_block_temps]
-            if not intervals:
-                continue
+        # Сортируем временные по началу интервала
+        sorted_temps = sorted(all_temps, key=lambda t: first_block[t])
 
-            intervals.sort(key=lambda iv: iv.start)
-            active: List[LiveInterval] = []
-            reg_map: Dict[int, str] = {}
+        active: List[Tuple[int, int]] = []  # (last, temp)
+        reg_assign: Dict[int, str] = {}
+        reg_map: Dict[int, Optional[str]] = {}
+        spill_map: Dict[int, bool] = {}
 
-            for iv in intervals:
-                # Освобождаем завершившиеся
-                expired = [a for a in active if a.end < iv.start]
-                for a in expired:
-                    active.remove(a)
-                    if a.temp in reg_map:
-                        del reg_map[a.temp]
+        for temp in sorted_temps:
+            start = first_block[temp]
+            end = last_block[temp]
 
-                # Пытаемся назначить свободный регистр
-                assigned_reg = None
-                for reg in self.phys_regs:
-                    if reg not in reg_map.values():
-                        assigned_reg = reg
-                        break
-
-                if assigned_reg is not None:
-                    reg_map[iv.temp] = assigned_reg
-                    active.append(iv)
-                    active.sort(key=lambda x: x.end)
-                    mapping[iv.temp] = assigned_reg
-                    is_spilled[iv.temp] = False
+            # Освобождаем регистры у тех, чей last < start
+            new_active = []
+            for (last_a, t) in active:
+                if last_a >= start:
+                    new_active.append((last_a, t))
                 else:
-                    # Нет свободного регистра – выбираем интервал с самым большим концом для spill
-                    to_spill = max(active, key=lambda x: x.end)
-                    active.remove(to_spill)
-                    freed_reg = reg_map.pop(to_spill.temp)
-                    # Теперь текущий интервал занимает этот регистр
-                    reg_map[iv.temp] = freed_reg
-                    active.append(iv)
-                    active.sort(key=lambda x: x.end)
-                    mapping[iv.temp] = freed_reg
-                    is_spilled[iv.temp] = False
-                    # Помечаем вытесненный как spill
-                    mapping[to_spill.temp] = None
-                    is_spilled[to_spill.temp] = True
+                    if t in reg_assign:
+                        del reg_assign[t]
+            active = new_active
 
-        return mapping, is_spilled
+            # Пытаемся выделить свободный регистр
+            allocated_reg = None
+            for reg in self.phys_regs:
+                if reg not in reg_assign.values():
+                    allocated_reg = reg
+                    break
 
+            if allocated_reg is not None:
+                reg_assign[temp] = allocated_reg
+                active.append((end, temp))
+                active.sort(key=lambda x: x[0])
+                reg_map[temp] = allocated_reg
+                spill_map[temp] = False
+            else:
+                # Нет свободного регистра – вытесняем интервал с максимальным концом
+                to_spill = max(active, key=lambda x: x[0])[1]
+                if to_spill in reg_assign:
+                    freed_reg = reg_assign[to_spill]
+                    del reg_assign[to_spill]
+                    active.remove((last_block[to_spill], to_spill))
+                    reg_assign[temp] = freed_reg
+                    active.append((end, temp))
+                    active.sort(key=lambda x: x[0])
+                    reg_map[temp] = freed_reg
+                    spill_map[temp] = False
+                    reg_map[to_spill] = None
+                    spill_map[to_spill] = True
+                else:
+                    reg_map[temp] = None
+                    spill_map[temp] = True
 
-    def _collect_operands(self, instr) -> List[Operand]:
-        from src.ir.ir_instructions import Operand, OperandType, Opcode
-        ops = []
-        if instr.dest and instr.dest.kind == OperandType.TEMP:
-            ops.append(instr.dest)
-        if instr.src1 and instr.src1.kind == OperandType.TEMP:
-            ops.append(instr.src1)
-        if instr.src2 and instr.src2.kind == OperandType.TEMP:
-            ops.append(instr.src2)
-        if instr.args:
-            for arg in instr.args:
-                if arg.kind == OperandType.TEMP:
-                    ops.append(arg)
-        return ops
+        for temp in all_temps:
+            if temp not in reg_map:
+                reg_map[temp] = None
+                spill_map[temp] = True
+
+        return reg_map, spill_map

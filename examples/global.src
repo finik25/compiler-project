@@ -1,0 +1,7 @@
+int global = 123;
+unsigned int uglobal = 456;
+
+fn main() -> int {
+    int local = global + uglobal;
+    return local;
+}
