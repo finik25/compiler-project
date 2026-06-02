@@ -19,6 +19,7 @@ class TokenType(Enum):
     KW_FN = auto()
     KW_VAR = auto()
     KW_UNSIGNED = auto()
+    KW_EXTERN = auto()
 
     # Identifiers & literals
     IDENTIFIER = auto()
@@ -40,6 +41,7 @@ class TokenType(Enum):
     LE = auto()         # '<='
     GE = auto()         # '>='
     AND = auto()        # '&&'
+    AMP = auto()        # '&'
     OR = auto()         # '||'
     ARROW = auto()      # '->'
     INC_OP = auto()     # '++'
@@ -53,6 +55,7 @@ class TokenType(Enum):
     LT = auto()         # '<'
     GT = auto()         # '>'
     NOT = auto()        # '!'
+
 
     # Delimiters
     LPAREN = auto()     # '('

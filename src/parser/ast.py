@@ -13,6 +13,7 @@ class NodeType(Enum):
     FUNCTION_DECL = "function_decl"
     STRUCT_DECL = "struct_decl"
     VAR_DECL = "var_decl"
+    EXTERN_DECL = "extern_decl"
     PARAM = "param"
 
     # Statements
@@ -33,6 +34,9 @@ class NodeType(Enum):
     ASSIGNMENT = "assignment"
     POSTFIX = "postfix"
 
+    ADDRESS_OF = "address_of"
+    DEREF = "deref"
+    ARRAY_ACCESS = "array_access"
 
 @dataclass
 class ASTNode:
@@ -102,17 +106,18 @@ class StructDeclNode(ASTNode):
 
 @dataclass
 class VarDeclNode(ASTNode):
-    """Объявление переменной (может использоваться как поле структуры)."""
     type_name: str
     name: str
     initializer: Optional['ExpressionNode'] = None
+    array_size: Optional[int] = None   # None = не массив, иначе положительный размер
 
     def __init__(self, type_name: str, name: str, initializer: Optional['ExpressionNode'],
-                 line: int, column: int):
+                 line: int, column: int, array_size: Optional[int] = None):
         super().__init__(NodeType.VAR_DECL, line, column)
         self.type_name = type_name
         self.name = name
         self.initializer = initializer
+        self.array_size = array_size
 
 
 # ============ Statement Nodes ============
@@ -199,6 +204,19 @@ class EmptyStmtNode(ASTNode):
     def __init__(self, line: int, column: int):
         super().__init__(NodeType.EMPTY_STMT, line, column)
 
+@dataclass
+class ExternDeclNode(ASTNode):
+    return_type: str
+    name: str
+    parameters: List[ParamNode]
+
+    def __init__(self, return_type: str, name: str, parameters: List[ParamNode],
+                 line: int, column: int):
+        super().__init__(NodeType.EXTERN_DECL, line, column)  # добавим NodeType.EXTERN_DECL
+        self.return_type = return_type
+        self.name = name
+        self.parameters = parameters
+
 
 # ============ Expression Nodes ============
 
@@ -282,17 +300,44 @@ class CallExprNode(ExpressionNode):
         self.callee = callee
         self.arguments = arguments
 
+@dataclass
+class AddressOfExprNode(ExpressionNode):
+    """Узел для оператора взятия адреса: &variable"""
+    operand: ExpressionNode   # должен быть IdentifierExprNode (или позже элемент массива)
+
+    def __init__(self, operand: ExpressionNode, line: int, column: int):
+        super().__init__(NodeType.ADDRESS_OF, line, column)
+        self.operand = operand
+
+@dataclass
+class DerefExprNode(ExpressionNode):
+    """Узел для оператора разыменования: *pointer"""
+    operand: ExpressionNode   # выражение, возвращающее указатель
+
+    def __init__(self, operand: ExpressionNode, line: int, column: int):
+        super().__init__(NodeType.DEREF, line, column)
+        self.operand = operand
 
 @dataclass
 class AssignmentExprNode(ExpressionNode):
-    """Оператор присваивания (используется как выражение)."""
-    target: str  # имя переменной
-    operator: TokenType  # ASSIGN, ADD_ASSIGN, SUB_ASSIGN, MUL_ASSIGN, DIV_ASSIGN
+    target: ExpressionNode   # вместо str
+    operator: TokenType
     value: ExpressionNode
 
-    def __init__(self, target: str, operator: TokenType, value: ExpressionNode,
+    def __init__(self, target: ExpressionNode, operator: TokenType, value: ExpressionNode,
                  line: int, column: int):
         super().__init__(NodeType.ASSIGNMENT, line, column)
         self.target = target
         self.operator = operator
         self.value = value
+
+@dataclass
+class ArrayAccessExprNode(ExpressionNode):
+    """Доступ к элементу массива: arr[index]"""
+    array: ExpressionNode   # обычно IdentifierExprNode, но может быть и другим выражением, возвращающим указатель
+    index: ExpressionNode
+
+    def __init__(self, array: ExpressionNode, index: ExpressionNode, line: int, column: int):
+        super().__init__(NodeType.ARRAY_ACCESS, line, column)
+        self.array = array
+        self.index = index

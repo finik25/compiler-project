@@ -1,0 +1,8 @@
+int arr[5];
+
+fn main() -> int {
+    arr[0] = 10;
+    arr[1] = 20;
+    int sum = arr[0] + arr[1];
+    return sum;
+}

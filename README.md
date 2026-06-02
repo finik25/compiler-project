@@ -1,10 +1,9 @@
-﻿
-# MiniCompiler
+﻿# MiniCompiler
 
 Учебный компилятор для упрощённого C-подобного языка.  
 Разработан в рамках курса «Построение компиляторов».  
-**Текущий этап — Sprint 6:** реализованы прямые условные переходы, поддержка `unsigned int`, короткое замыкание логических операторов, глобальные переменные.  
-Все 49 тестов успешно проходят.
+**Текущий этап — Sprint 7:** реализованы указатели, глобальные массивы, поддержка `unsigned int`, короткое замыкание логических операторов, оптимизации IR и вызов внешних функций.  
+Все 55 тестов успешно проходят (на целевой платформе Linux).
 
 ## Документация
 
@@ -49,15 +48,16 @@ compiler-project/
 │   │   ├── ir_generator.py        # Генерация IR из AST
 │   │   ├── ir_printer.py          # Текстовый вывод IR
 │   │   ├── ir_dot.py              # Graphviz для CFG
-│   │   └── ir_json.py             # JSON для IR
-│   └── codegen/                   # Генерация x86-64 кода (Sprint 5-6)
+│   │   ├── ir_json.py             # JSON для IR
+│   │   └── optimizer.py           # Оптимизации IR (Sprint 7)
+│   └── codegen/                   # Генерация x86-64 кода (Sprint 5-7)
 │       ├── __init__.py
 │       ├── x86_generator.py       # Основной генератор ассемблера
 │       ├── stack_frame.py         # Управление стековыми слотами
 │       ├── abi.py                 # Регистры, системные вызовы
 │       ├── register_allocator.py  # (экспериментальный) LSRA
 │       └── liveness.py            # Анализ живых переменных (для LSRA)
-├── tests/                         # Тесты (49 штук)
+├── tests/                         # Тесты (55 штук)
 │   ├── test_lexer.py
 │   ├── test_preprocessor.py
 │   ├── test_parser.py
@@ -115,7 +115,7 @@ compiler ir --input tests/ir/valid/if.src --format dot --output cfg.dot
 
 ```bash
 compiler compile --input examples/simple_add.src --output program.asm
-compiler compile --input examples/simple_add.src --run   # требует nasm + ld
+compiler compile --input examples/simple_add.src --run   # требует nasm + ld/gcc
 ```
 
 ### 7. Запуск всех тестов
@@ -124,156 +124,130 @@ compiler compile --input examples/simple_add.src --run   # требует nasm +
 pytest tests/ -v
 ```
 
-## Промежуточное представление (IR)
+## Новые возможности Sprint 7
 
-IR — трёхадресный код с базовыми блоками. Инструкции:
-- Арифметика: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`
-- Логика: `AND`, `OR`, `NOT`, `XOR`
-- Сравнения: `CMP_EQ`, `CMP_NE`, `CMP_LT`, `CMP_LE`, `CMP_GT`, `CMP_GE`
-- Прямые условные переходы: `BR_EQ`, `BR_NE`, `BR_LT`, `BR_LE`, `BR_GT`, `BR_GE`, `BR_ULT`, `BR_ULE`, `BR_UGT`, `BR_UGE`
-- Управление: `JUMP`, `JUMP_IF`, `JUMP_IF_NOT`, `LABEL`
-- Функции: `CALL`, `RETURN`, `PARAM`
-- Данные: `MOVE`, `LOAD`, `STORE`
+### Указатели (`&` и `*`)
 
-Пример IR для функции `factorial`:
-```text
-function factorial: int (int n)
-  entry:
-    t1 = CMP_LE n, 1
-    JUMP_IF t1, L_true
-    JUMP L_false
-  L_true:
-    RETURN 1
-  L_false:
-    t2 = SUB n, 1
-    PARAM 0, t2
-    t3 = CALL factorial, 1
-    t4 = MUL n, t3
-    RETURN t4
-```
+Поддерживаются взятие адреса переменной, разыменование указателя, присваивание по указателю.
 
-## Генерация x86-64 кода (Sprint 5-6)
-
-Кодогенератор преобразует IR в ассемблер NASM для x86-64, следуя **System V AMD64 ABI**.  
-По умолчанию используется **стековая модель** (все временные переменные хранятся на стеке). Это надёжно и достаточно для демонстрации всех возможностей языка. Экспериментальный регистровый аллокатор (LSRA) присутствует в исходном коде, но отключён из-за нестабильности.
-
-### Прямые условные переходы
-
-Для реляционных операторов генерируются прямые `cmp` + условный переход, без лишних `setcc`/`movzx`.  
-Поддерживаются как знаковые, так и беззнаковые переходы (`jl`/`jb`, `jg`/`ja` и т.д.).
-
-**Пример для `if (x < y)`**:
-```asm
-    mov rax, [rbp-8]
-    mov rbx, [rbp-16]
-    cmp rax, rbx
-    jl .then
-    jmp .else
-.then:
-    ...
-.else:
-    ...
-```
-
-### Поддержка `unsigned int`
-
-- Лексер распознаёт ключевое слово `unsigned`.
-- Парсер формирует тип `"unsigned int"`.
-- Семантический анализ допускает неявное приведение `int` → `unsigned int`.
-- IR содержит флаг `is_unsigned` для выбора правильных арифметических и сравнительных инструкций.
-- Кодогенератор использует беззнаковые инструкции `mul`/`div` и переходы `jb`/`ja`/`jbe`/`jae`.
-
-**Пример (`demo_unsigned.src`):**
 ```c
-unsigned int u = 4000000000;
-unsigned int v = 3000000000;
-if (u > v) return 1; else return 0;
+fn main() -> int {
+    int x = 42;
+    int* p = &x;
+    int y = *p;
+    return y;   // 42
+}
 ```
 
-Сгенерированный фрагмент:
-```asm
-    mov rax, 4000000000
-    mov [rbp-8], rax
-    mov rax, 3000000000
-    mov [rbp-16], rax
-    cmp rax, rbx
-    ja .then1        # беззнаковое "выше"
-    jmp .else2
+### Глобальные массивы
+
+Глобальные массивы размещаются в секциях `.data`/`.bss`, доступ к элементам через индексацию.
+
+```c
+int arr[5] = {1,2,3,4,5};
+fn main() -> int {
+    return arr[2];   // 3
+}
+```
+
+### `unsigned int` и беззнаковые сравнения
+
+Ключевое слово `unsigned` для целых без знака, корректные сравнения (`ja`/`jb`).
+
+```c
+fn main() -> int {
+    unsigned int u = 4000000000;
+    unsigned int v = 3000000000;
+    if (u > v) return 1; else return 0;
+}
 ```
 
 ### Короткое замыкание `&&` и `||`
 
-Логические операторы транслируются в цепочки условных переходов. Правый операнд вычисляется только при необходимости. Протестировано на выражениях без побочных эффектов (тесты `test_short_circuit_and` и `test_short_circuit_or` проходят).
+Правый операнд вычисляется только при необходимости.
 
-### Глобальные переменные
+```c
+fn main() -> int {
+    int a = 0;
+    int b = 10;
+    if (a != 0 && b / a > 5) {
+        return 0;   // не выполнится
+    } else {
+        return 1;
+    }
+}
+```
 
-Глобальные переменные размещаются в секциях `.data` (инициализированные) или `.bss` (неинициализированные). Доступ через `rel`-адресацию. Поддерживаются типы `int`, `unsigned int`, `bool`.
+### Оптимизации IR
 
-## Проверка сгенерированного ассемблера
-
-После компиляции можно проанализировать выходной файл:
+Флаг `--optimize` включает:
+- Constant folding (свёртка констант)
+- Constant propagation
+- Dead code elimination
+- Удаление недостижимых блоков
 
 ```bash
-compiler compile --input examples/demo_unsigned.src --output test.asm
-cat test.asm | grep -E "ja|jb|jl|jg"
+compiler compile --input simple_opt.src --output with_opt.asm --optimize
 ```
 
-Ожидаемый вывод для `demo_unsigned.src`:
-```asm
-    ja .then1
+### Вызов внешних функций (`extern`)
+
+Поддержка вызова функций из C runtime (printf, malloc, free) с соблюдением System V AMD64 ABI.
+
+```c
+extern fn printf(char* fmt, ...);
+extern fn malloc(int size) -> int*;
+extern fn free(int* ptr) -> void;
+
+fn main() -> int {
+    int* p = malloc(4);
+    if (p == 0) return 1;
+    *p = 42;
+    printf("Value: %d\n", *p);
+    free(p);
+    return 0;
+}
 ```
 
-Также можно собрать и запустить исполняемый файл:
+## Примеры использования
+
+### Компиляция и запуск программы с указателями
 
 ```bash
-compiler compile --input examples/demo_unsigned.src --run
-echo $LASTEXITCODE   # в PowerShell: $LASTEXITCODE, в bash: echo $?
+cat > test_ptr.src << EOF
+fn main() -> int {
+    int x = 42;
+    int* p = &x;
+    return *p;
+}
+EOF
+compiler compile --input test_ptr.src --run
+echo $?   # 42
 ```
 
-Код возврата должен быть `1`, так как 4000000000 > 3000000000.
+### Демонстрация сворачивания констант
+
+```bash
+cat > const_fold.src << EOF
+fn main() -> int {
+    return 10 + 20;
+}
+EOF
+compiler compile --input const_fold.src --output no_opt.asm
+compiler compile --input const_fold.src --output opt.asm --optimize
+diff no_opt.asm opt.asm   # покажет, что в opt.asm сразу mov eax,30
+```
 
 ## Тестирование
-
-Все 49 тестов проходят. Запуск:
 
 ```bash
 pytest tests/ -v
 ```
 
-Результат:
-```
-====================== 49 passed in 1.80s ======================
-```
+## Требования к окружению
 
-Категории тестов:
-- Лексика (valid / invalid)
-- Препроцессор
-- Синтаксис (valid / invalid)
-- Семантика (valid / invalid)
-- IR (валидные программы и ожидаемые ошибки)
-- Кодогенерация (арифметика, if, while, глобальные переменные, short-circuit, unsigned)
+- Python 3.8+
+- NASM (для сборки ассемблера)
+- GCC или LD (для линковки)
+- Graphviz (опционально, для визуализации)
 
-## Системные требования
-
-- **Python 3.8+**
-- **pip**
-- **Graphviz** (опционально, для визуализации AST и CFG)
-- **NASM** и **GNU ld** (опционально, для сборки и запуска сгенерированного кода)
-
-## Что нового в Sprint 6
-
-| Возможность | Статус |
-|-------------|--------|
-| Прямые условные переходы (`jl`, `jg`, `je`, `jne`, `jb`, `ja` и т.д.) | ✅ Реализованы |
-| Поддержка `unsigned int` (все этапы) | ✅ Полностью |
-| Короткое замыкание `&&` / `||` (без побочных эффектов) | ✅ Проходит тесты |
-| Глобальные переменные (включая `unsigned int`) | ✅ Работают |
-| Регистровая аллокация (локальная) | ⚠️ Отключена (LSRA в коде, но нестабилен) |
-| Short-circuit с вызовом функции | ⚠️ Отложен (не влияет на основную функциональность) |
-
-## Планы на Sprint 7
-
-- Стабилизация локальной регистровой аллокации.
-- Поддержка динамических массивов (куча) через `malloc`/`free`.
-- Оптимизации: постоянное сворачивание, удаление мёртвого кода.
-- `break` и `continue` в циклах.

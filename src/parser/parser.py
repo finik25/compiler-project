@@ -141,19 +141,26 @@ class Parser:
                 type_name = self.type_name()
                 return self.variable_declaration_with_type(type_name)
 
+            if self.match(TokenType.KW_EXTERN): return self.extern_declaration()
+
             return self.statement()
         except ParseError:
             self.synchronize()
             return None
 
     def variable_declaration_with_type(self, type_name: str) -> VarDeclNode:
-        name_token = self.consume(TokenType.IDENTIFIER, "Ожидается имя переменной")
+        name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         name = name_token.lexeme
+        array_size = None
+        if self.match(TokenType.LBRACKET):
+            size_token = self.consume(TokenType.INT_LITERAL, "Expected array size")
+            array_size = size_token.literal
+            self.consume(TokenType.RBRACKET, "Expected ']' after array size")
         initializer = None
         if self.match(TokenType.ASSIGN):
             initializer = self.expression()
-        self.consume(TokenType.SEMICOLON, "Ожидается ';' после объявления переменной")
-        return VarDeclNode(type_name, name, initializer, name_token.line, name_token.column)
+        self.consume(TokenType.SEMICOLON, "Expected ';' after variable declaration")
+        return VarDeclNode(type_name, name, initializer, name_token.line, name_token.column, array_size)
 
     def function_declaration(self) -> FunctionDeclNode:
         line = self.previous().line
@@ -187,32 +194,42 @@ class Parser:
 
     def variable_declaration(self) -> VarDeclNode:
         type_name = self.type_name()
-        name_token = self.consume(TokenType.IDENTIFIER, "Ожидается имя переменной")
+        name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         name = name_token.lexeme
+        array_size = None
+        if self.match(TokenType.LBRACKET):
+            size_token = self.consume(TokenType.INT_LITERAL, "Expected array size")
+            array_size = size_token.literal
+            self.consume(TokenType.RBRACKET, "Expected ']' after array size")
         initializer = None
         if self.match(TokenType.ASSIGN):
             initializer = self.expression()
-        self.consume(TokenType.SEMICOLON, "Ожидается ';' после объявления переменной")
-        return VarDeclNode(type_name, name, initializer, name_token.line, name_token.column)
+        self.consume(TokenType.SEMICOLON, "Expected ';' after variable declaration")
+        return VarDeclNode(type_name, name, initializer, name_token.line, name_token.column, array_size)
 
     def type_name(self) -> str:
-        if self.check(TokenType.KW_VAR):
-            raise ParseError("'var' не является типом; используйте 'var' для объявления переменной с выводом типа", self.peek())
+        # Обработка unsigned int
         if self.match(TokenType.KW_UNSIGNED):
             self.consume(TokenType.KW_INT, "Expected 'int' after 'unsigned'")
-            return "unsigned int"
-        if self.match(TokenType.KW_INT):
-            return "int"
-        if self.match(TokenType.KW_FLOAT):
-            return "float"
-        if self.match(TokenType.KW_BOOL):
-            return "bool"
-        if self.match(TokenType.KW_VOID):
-            return "void"
-        if self.match(TokenType.KW_STRUCT):
-            name_token = self.consume(TokenType.IDENTIFIER, "Ожидается имя структуры")
-            return f"struct {name_token.lexeme}"
-        raise ParseError("Ожидается тип", self.peek())
+            base_type = "unsigned int"
+        else:
+            if self.match(TokenType.KW_INT):
+                base_type = "int"
+            elif self.match(TokenType.KW_FLOAT):
+                base_type = "float"
+            elif self.match(TokenType.KW_BOOL):
+                base_type = "bool"
+            elif self.match(TokenType.KW_VOID):
+                base_type = "void"
+            elif self.match(TokenType.KW_STRUCT):
+                name_token = self.consume(TokenType.IDENTIFIER, "Expected struct name")
+                base_type = f"struct {name_token.lexeme}"
+            else:
+                raise ParseError("Expected type", self.peek())
+        # После базового типа может идти * (указатель)
+        while self.match(TokenType.STAR):
+            base_type += "*"
+        return base_type
 
     def parameters(self) -> List[ParamNode]:
         params = []
@@ -341,12 +358,13 @@ class Parser:
         if self.match(TokenType.ASSIGN, TokenType.ADD_ASSIGN, TokenType.SUB_ASSIGN,
                       TokenType.MUL_ASSIGN, TokenType.DIV_ASSIGN):
             op = self.previous().type
-            if not isinstance(left, IdentifierExprNode):
-                error = ParseError("Левая часть присваивания должна быть идентификатором", self.previous())
+            # Разрешаем: Identifier, ArrayAccess, Deref (указатель)
+            if not isinstance(left, (IdentifierExprNode, ArrayAccessExprNode, DerefExprNode)):
+                error = ParseError("Invalid left-hand side in assignment", self.previous())
                 self.errors.append(error)
                 raise error
             right = self.assignment()
-            return AssignmentExprNode(left.name, op, right, left.line, left.column)
+            return AssignmentExprNode(left, op, right, left.line, left.column)
         return left
 
     def logical_or(self) -> ExpressionNode:
@@ -402,6 +420,12 @@ class Parser:
             op = self.previous().type
             operand = self.unary()
             return UnaryExprNode(op, operand, self.previous().line, self.previous().column)
+        if self.match(TokenType.AMP):  # & variable
+            operand = self.unary()
+            return AddressOfExprNode(operand, self.previous().line, self.previous().column)
+        if self.match(TokenType.STAR):  # *pointer
+            operand = self.unary()
+            return DerefExprNode(operand, self.previous().line, self.previous().column)
         return self.postfix()
 
     def postfix(self) -> ExpressionNode:
@@ -445,7 +469,13 @@ class Parser:
             return LiteralExprNode(False, TokenType.KW_FALSE, token.line, token.column)
         if self.match(TokenType.IDENTIFIER):
             token = self.previous()
-            return IdentifierExprNode(token.lexeme, token.line, token.column)
+            expr = IdentifierExprNode(token.lexeme, token.line, token.column)
+            # Обработка последовательных [ ... ] для многомерных массивов
+            while self.match(TokenType.LBRACKET):
+                index = self.expression()
+                self.consume(TokenType.RBRACKET, "Expected ']'")
+                expr = ArrayAccessExprNode(expr, index, token.line, token.column)
+            return expr
         if self.match(TokenType.LPAREN):
             expr = self.expression()
             self.consume(TokenType.RPAREN, "Ожидается ')' после выражения")
@@ -464,3 +494,18 @@ class Parser:
             initializer = self.expression()
         self.consume(TokenType.SEMICOLON, "Ожидается ';' после объявления переменной")
         return VarDeclNode("var", name, initializer, line, column)
+
+    def extern_declaration(self) -> ExternDeclNode:
+        line = self.previous().line
+        column = self.previous().column
+        self.consume(TokenType.KW_FN, "Expected 'fn' after 'extern'")
+        name_token = self.consume(TokenType.IDENTIFIER, "Expected function name")
+        name = name_token.lexeme
+        self.consume(TokenType.LPAREN, "Expected '('")
+        params = self.parameters()
+        self.consume(TokenType.RPAREN, "Expected ')'")
+        return_type = "void"
+        if self.match(TokenType.ARROW):
+            return_type = self.type_name()
+        self.consume(TokenType.SEMICOLON, "Expected ';' after extern declaration")
+        return ExternDeclNode(return_type, name, params, line, column)

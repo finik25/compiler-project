@@ -9,15 +9,20 @@ class SymbolKind(Enum):
 
 class Symbol:
     def __init__(self, name: str, kind: SymbolKind, type_name: str, line: int, column: int,
-                 params: Optional[List['Symbol']] = None, return_type: Optional[str] = None):
+                 params: Optional[List['Symbol']] = None, return_type: Optional[str] = None,
+                 is_external: bool = False, is_variadic: bool = False,
+                 array_size: int = 0):          # новое поле
         self.name = name
         self.kind = kind
-        self.type_name = type_name      # для переменных, параметров, полей структур
+        self.type_name = type_name   # для массива – тип элемента
         self.line = line
         self.column = column
-        self.params = params or []      # для функции
-        self.return_type = return_type  # для функции
-        self.fields: Dict[str, 'Symbol'] = {}   # для структуры
+        self.params = params or []
+        self.return_type = return_type
+        self.fields: Dict[str, 'Symbol'] = {}
+        self.is_external = is_external
+        self.is_variadic = is_variadic
+        self.array_size = array_size   # 0 = не массив, иначе размер
 
 class SymbolTable:
     def __init__(self):

@@ -1,7 +1,9 @@
 from typing import List, Optional
+
+from src.ir import Instruction, Opcode, Operand
 from src.parser.ast import *
 from src.semantic.symbol_table import SymbolTable, Symbol, SymbolKind
-from src.semantic.type_system import is_compatible, get_binary_result_type, get_unary_result_type
+from src.semantic.type_system import is_compatible, get_binary_result_type, get_unary_result_type, size_of
 from src.semantic.errors import SemanticError
 from src.lexer.token import TokenType
 
@@ -23,6 +25,8 @@ class SemanticAnalyzer:
                 self._register_struct(decl)
             elif isinstance(decl, VarDeclNode):
                 self._register_global_variable(decl)
+            elif isinstance(decl, ExternDeclNode):  # <-- новое
+                self._register_extern_function(decl)
 
         # Второй проход: анализ инициализаторов глобальных переменных (вывод типов для var)
         for decl in program.declarations:
@@ -35,6 +39,30 @@ class SemanticAnalyzer:
                 self._analyze_function(decl)
 
         return self.symbol_table, self.errors
+
+    def _register_extern_function(self, node: ExternDeclNode):
+        # Если функция уже есть во встроенных (runtime), не добавляем повторно
+        builtins = {"malloc", "free", "print_int", "print_char", "exit", "printf", "scanf"}
+        if node.name in builtins:
+            # Просто игнорируем, т.к. уже зарегистрирована в _register_runtime_functions
+            return
+        existing = self.symbol_table.lookup(node.name)
+        if existing:
+            self.errors.append(SemanticError(f"Duplicate function '{node.name}'", node.line, node.column))
+            return
+        existing = self.symbol_table.lookup(node.name)
+        if existing:
+            self.errors.append(SemanticError(f"Duplicate function '{node.name}'", node.line, node.column))
+            return
+        # Создаём символ с флагом is_external = True
+        func_sym = Symbol(node.name, SymbolKind.FUNCTION, node.return_type, node.line, node.column,
+                          params=[], return_type=node.return_type,
+                          is_external=True, is_variadic=(node.name in ('printf', 'scanf')))
+        # Заполняем параметры (типы и имена)
+        for param in node.parameters:
+            param_sym = Symbol(param.name, SymbolKind.PARAMETER, param.type_name, param.line, param.column)
+            func_sym.params.append(param_sym)
+        self.symbol_table.insert(node.name, func_sym)
 
     def get_report(self) -> str:
         lines = []
@@ -85,10 +113,11 @@ class SemanticAnalyzer:
             self.errors.append(SemanticError(f"Duplicate global variable '{node.name}'", node.line, node.column))
             return
         # Для var временно сохраняем тип "var", позже выведем из инициализатора
-        var_sym = Symbol(node.name, SymbolKind.VARIABLE, node.type_name, node.line, node.column)
+        # Передаём array_size (0 если не массив)
+        array_size = node.array_size if node.array_size is not None else 0
+        var_sym = Symbol(node.name, SymbolKind.VARIABLE, node.type_name, node.line, node.column,
+                         array_size=array_size)
         self.symbol_table.insert(node.name, var_sym)
-        # Запоминаем узел для последующего вывода типа (если нужен)
-        # Можно добавить словарь global_var_nodes, но проще обработать в _analyze_global_initializer
 
     def _register_runtime_functions(self):
         """Регистрирует встроенные функции runtime (print_int, exit, print_char)."""
@@ -106,6 +135,28 @@ class SemanticAnalyzer:
         print_char_sym = Symbol("print_char", SymbolKind.FUNCTION, "void", 0, 0)
         print_char_sym.params = [Symbol("ch", SymbolKind.PARAMETER, "int", 0, 0)]
         self.symbol_table.insert("print_char", print_char_sym)
+
+        # printf: int (char*, ...)
+        printf_sym = Symbol("printf", SymbolKind.FUNCTION, "int", 0, 0)
+        printf_sym.params = [Symbol("format", SymbolKind.PARAMETER, "char*", 0, 0)]
+        printf_sym.is_variadic = True
+        self.symbol_table.insert("printf", printf_sym)
+
+        # scanf: int (char*, ...)
+        scanf_sym = Symbol("scanf", SymbolKind.FUNCTION, "int", 0, 0)
+        scanf_sym.params = [Symbol("format", SymbolKind.PARAMETER, "char*", 0, 0)]
+        scanf_sym.is_variadic = True
+        self.symbol_table.insert("scanf", scanf_sym)
+
+        # malloc: void* (int)
+        malloc_sym = Symbol("malloc", SymbolKind.FUNCTION, "void*", 0, 0)
+        malloc_sym.params = [Symbol("size", SymbolKind.PARAMETER, "int", 0, 0)]
+        self.symbol_table.insert("malloc", malloc_sym)
+
+        # free: void (void*)
+        free_sym = Symbol("free", SymbolKind.FUNCTION, "void", 0, 0)
+        free_sym.params = [Symbol("ptr", SymbolKind.PARAMETER, "void*", 0, 0)]
+        self.symbol_table.insert("free", free_sym)
 
     # ---------- Второй проход: анализ тел ----------
     def _analyze_function(self, node: FunctionDeclNode):
@@ -176,7 +227,28 @@ class SemanticAnalyzer:
                 final_type = "error"
             else:
                 final_type = init_type
-                node.type_name = final_type   # декорируем узел
+                node.type_name = final_type
+
+        # Обработка объявления массива
+        if node.array_size is not None:
+            if node.array_size <= 0:
+                self.errors.append(
+                    SemanticError(f"Array size must be positive, got {node.array_size}", node.line, node.column))
+                return
+            # Для глобальных массивов пока разрешаем только константный размер (уже есть)
+            # Проверка инициализатора: списков пока нет, но можно присваивать только отдельные элементы позже
+            if node.initializer:
+                self.errors.append(
+                    SemanticError("Array initialization with list is not supported yet", node.line, node.column))
+            # Создаём символ с array_size
+            var_sym = Symbol(node.name, SymbolKind.VARIABLE, node.type_name, node.line, node.column,
+                             array_size=node.array_size)
+            # Для массива тип переменной в таблице – это тип элемента, а размер хранится отдельно
+            # Но для совместимости с существующим кодом, оставляем type_name = node.type_name
+            self.symbol_table.insert(node.name, var_sym)
+            # Также запомним, что это массив, чтобы при обращении по имени возвращать адрес (а не значение)
+            # Эту информацию можно получить через var_sym.array_size > 0
+            return
         else:
             # Обычный тип: проверяем совместимость с инициализатором, если он есть
             if init_type and init_type != "error":
@@ -189,9 +261,8 @@ class SemanticAnalyzer:
             elif init_type == "error":
                 final_type = "error"
 
-        # Создаём символ (даже с типом "error" – чтобы избежать undeclared cascade)
-        var_sym = Symbol(node.name, SymbolKind.VARIABLE, final_type, node.line, node.column)
-        self.symbol_table.insert(node.name, var_sym)
+            var_sym = Symbol(node.name, SymbolKind.VARIABLE, final_type, node.line, node.column)
+            self.symbol_table.insert(node.name, var_sym)
 
     # ---------- Анализ выражений (с распространением ошибок) ----------
     def _analyze_expression(self, expr: ExpressionNode) -> str:
@@ -211,15 +282,18 @@ class SemanticAnalyzer:
         elif isinstance(expr, IdentifierExprNode):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
-                # Вставляем error-символ, чтобы избежать повторных ошибок
                 error_sym = Symbol(expr.name, SymbolKind.VARIABLE, "error", expr.line, expr.column)
                 self.symbol_table.insert(expr.name, error_sym)
                 self.errors.append(SemanticError(f"Undeclared identifier '{expr.name}'", expr.line, expr.column))
                 expr.type_annotation = "error"
                 return "error"
             expr.symbol = sym
-            expr.type_annotation = sym.type_name
-            return sym.type_name
+            # Если это массив, возвращаем тип указателя на элемент
+            if sym.array_size > 0:
+                expr.type_annotation = sym.type_name + "*"
+            else:
+                expr.type_annotation = sym.type_name
+            return expr.type_annotation
 
         elif isinstance(expr, BinaryExprNode):
             left_type = self._analyze_expression(expr.left)
@@ -269,6 +343,58 @@ class SemanticAnalyzer:
             expr.type_annotation = operand_type
             return operand_type
 
+        elif isinstance(expr, AddressOfExprNode):
+            operand_type = self._analyze_expression(expr.operand)
+            if operand_type == "error":
+                expr.type_annotation = "error"
+                return "error"
+            # Проверка: операнд должен быть переменной (IdentifierExprNode)
+            if not isinstance(expr.operand, IdentifierExprNode):
+                self.errors.append(SemanticError(
+                    f"Address-of operator '&' can only be applied to variables, not to expression of type '{operand_type}'",
+                    expr.line, expr.column))
+                expr.type_annotation = "error"
+                return "error"
+            result_type = operand_type + "*"
+            expr.type_annotation = result_type
+            return result_type
+
+        elif isinstance(expr, DerefExprNode):
+            operand_type = self._analyze_expression(expr.operand)
+            if operand_type == "error":
+                expr.type_annotation = "error"
+                return "error"
+            if not operand_type.endswith("*"):
+                self.errors.append(SemanticError(
+                    f"Indirection operator '*' can only be applied to pointer types, got '{operand_type}'",
+                    expr.line, expr.column))
+                expr.type_annotation = "error"
+                return "error"
+            result_type = operand_type[:-1]  # удаляем '*'
+            expr.type_annotation = result_type
+            return result_type
+        elif isinstance(expr, ArrayAccessExprNode):
+            array_type = self._analyze_expression(expr.array)
+            index_type = self._analyze_expression(expr.index)
+            if array_type == "error" or index_type == "error":
+                expr.type_annotation = "error"
+                return "error"
+            if index_type not in ("int", "unsigned int"):
+                self.errors.append(
+                    SemanticError(f"Array index must be integer, got '{index_type}'", expr.line, expr.column))
+                expr.type_annotation = "error"
+                return "error"
+            # Если array_type - указатель или массив
+            if array_type.endswith("*") or (isinstance(expr.array,
+                                                       IdentifierExprNode) and expr.array.symbol and expr.array.symbol.array_size > 0):
+                element_type = array_type[:-1] if array_type.endswith("*") else array_type
+                expr.type_annotation = element_type
+                return element_type
+            else:
+                self.errors.append(
+                    SemanticError(f"Can only index array or pointer, got '{array_type}'", expr.line, expr.column))
+                expr.type_annotation = "error"
+                return "error"
         elif isinstance(expr, CallExprNode):
             sym = self.symbol_table.lookup(expr.callee)
             if not sym or sym.kind != SymbolKind.FUNCTION:
@@ -277,7 +403,13 @@ class SemanticAnalyzer:
                 return "error"
             expr.function_symbol = sym
             # Проверка аргументов (с учётом error propagation)
-            if len(expr.arguments) != len(sym.params):
+            if len(expr.arguments) < len(sym.params):
+                if sym.is_variadic:
+                    msg = f"Argument count mismatch for function '{expr.callee}': expected at least {len(sym.params)}, got {len(expr.arguments)}"
+                else:
+                    msg = f"Argument count mismatch for function '{expr.callee}': expected {len(sym.params)}, got {len(expr.arguments)}"
+                self.errors.append(SemanticError(msg, expr.line, expr.column))
+            elif not sym.is_variadic and len(expr.arguments) > len(sym.params):
                 self.errors.append(SemanticError(
                     f"Argument count mismatch for function '{expr.callee}': expected {len(sym.params)}, got {len(expr.arguments)}",
                     expr.line, expr.column
@@ -302,37 +434,65 @@ class SemanticAnalyzer:
             return sym.return_type
 
         elif isinstance(expr, AssignmentExprNode):
-            target_sym = self.symbol_table.lookup(expr.target)
-            if not target_sym:
-                # Вставляем error-символ
-                error_sym = Symbol(expr.target, SymbolKind.VARIABLE, "error", expr.line, expr.column)
-                self.symbol_table.insert(expr.target, error_sym)
-                self.errors.append(
-                    SemanticError(f"Assignment to undeclared variable '{expr.target}'", expr.line, expr.column))
+            target_node = expr.target
+            # Определяем тип левой части
+            if isinstance(target_node, IdentifierExprNode):
+                target_sym = self.symbol_table.lookup(target_node.name)
+                if not target_sym:
+                    error_sym = Symbol(target_node.name, SymbolKind.VARIABLE, "error", target_node.line,
+                                       target_node.column)
+                    self.symbol_table.insert(target_node.name, error_sym)
+                    self.errors.append(
+                        SemanticError(f"Assignment to undeclared variable '{target_node.name}'", target_node.line,
+                                      target_node.column))
+                    expr.type_annotation = "error"
+                    return "error"
+                target_type = target_sym.type_name
+            elif isinstance(target_node, ArrayAccessExprNode):
+                target_type = self._analyze_expression(target_node)
+                if target_type == "error":
+                    expr.type_annotation = "error"
+                    return "error"
+            elif isinstance(target_node, DerefExprNode):
+                # *ptr = value
+                ptr_type = self._analyze_expression(target_node.operand)
+                if ptr_type == "error":
+                    target_type = "error"
+                elif ptr_type.endswith("*"):
+                    target_type = ptr_type[:-1]  # удаляем последнюю '*', получаем базовый тип
+                else:
+                    self.errors.append(
+                        SemanticError(f"Cannot dereference non-pointer type '{ptr_type}'", target_node.line,
+                                      target_node.column))
+                    target_type = "error"
+            else:
+                self.errors.append(SemanticError(f"Invalid left-hand side in assignment", expr.line, expr.column))
                 expr.type_annotation = "error"
                 return "error"
+            # Анализируем правую часть
             right_type = self._analyze_expression(expr.value)
-            if right_type == "error" or target_sym.type_name == "error":
+            if right_type == "error" or target_type == "error":
                 expr.type_annotation = "error"
                 return "error"
-            if not is_compatible(target_sym.type_name, right_type):
+            # Проверка совместимости типов
+            if not is_compatible(target_type, right_type):
                 self.errors.append(SemanticError(
-                    f"Assignment type mismatch: variable '{expr.target}' is '{target_sym.type_name}', expression is '{right_type}'",
+                    f"Assignment type mismatch: left side is '{target_type}', expression is '{right_type}'",
                     expr.value.line, expr.value.column
                 ))
                 expr.type_annotation = "error"
                 return "error"
-            # Составные присваивания требуют числового типа
+            # Составные присваивания – требуют числового типа
             if expr.operator != TokenType.ASSIGN:
-                if target_sym.type_name not in ("int", "float"):
+                if target_type not in ("int", "float", "unsigned int"):
                     self.errors.append(SemanticError(
-                        f"Compound assignment operator requires numeric type, but '{expr.target}' is '{target_sym.type_name}'",
+                        f"Compound assignment operator requires numeric type, got '{target_type}'",
                         expr.line, expr.column
                     ))
                     expr.type_annotation = "error"
                     return "error"
-            expr.type_annotation = target_sym.type_name
-            return target_sym.type_name
+            expr.type_annotation = target_type
+            return target_type
 
         else:
             self.errors.append(SemanticError(f"Unknown expression type: {type(expr).__name__}", expr.line, expr.column))

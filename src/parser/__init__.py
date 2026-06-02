@@ -27,6 +27,7 @@ from src.parser.ast import (
 
 from src.parser.parser import Parser, ParseError
 from src.parser.ast_json import ASTJSONGenerator
+from .ast import ArrayAccessExprNode
 
 __all__ = [
     # AST nodes

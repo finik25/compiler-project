@@ -67,7 +67,8 @@ class ASTDotGenerator:
         elif isinstance(node, CallExprNode):
             return f"call {node.callee}"
         elif isinstance(node, AssignmentExprNode):
-            return f"{node.target} {node.operator.name}"
+            target_str = self._label(node.target)  # рекурсивно получим метку для цели
+            return f"{target_str} {node.operator.name} ="
         else:
             return "?"
 
@@ -118,5 +119,6 @@ class ASTDotGenerator:
         elif isinstance(node, CallExprNode):
             children.extend(node.arguments)
         elif isinstance(node, AssignmentExprNode):
+            children.append(node.target)
             children.append(node.value)
         return children

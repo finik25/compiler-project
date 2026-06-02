@@ -5,6 +5,10 @@ Scope 0:
   print_int (function) : void
   exit (function) : void
   print_char (function) : void
+  printf (function) : int
+  scanf (function) : int
+  malloc (function) : void*
+  free (function) : void
   main (function) : int
 Scope 2:
   x (variable) : int

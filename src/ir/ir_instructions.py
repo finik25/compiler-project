@@ -19,7 +19,8 @@ class Operand:
     kind: OperandType
     value: Any                     # значение: int, str, или номер временной
     type_name: Optional[str] = None  # "int", "float", "bool", "void", "string"
-    is_unsigned: bool = False  # новое поле
+    is_unsigned: bool = False
+    is_address: bool = False
 
     def __str__(self) -> str:
         if self.kind == OperandType.TEMP:
@@ -34,8 +35,8 @@ class Operand:
             return self.value
 
     @staticmethod
-    def temp(index: int, type_name: Optional[str] = None, is_unsigned: bool = False) -> 'Operand':
-        return Operand(OperandType.TEMP, index, type_name, is_unsigned)
+    def temp(index: int, type_name: Optional[str] = None, is_unsigned: bool = False, is_address: bool = False) -> 'Operand':
+        return Operand(OperandType.TEMP, index, type_name, is_unsigned, is_address)
 
     @staticmethod
     def const(value: Any, type_name: Optional[str] = None) -> 'Operand':
@@ -49,8 +50,9 @@ class Operand:
             return Operand(OperandType.LABEL, f"L{name}")
 
     @staticmethod
-    def symbol(name: str, type_name: Optional[str] = None, is_unsigned: bool = False) -> 'Operand':
-        return Operand(OperandType.SYMBOL, name, type_name, is_unsigned)
+    def symbol(name: str, type_name: Optional[str] = None, is_unsigned: bool = False,
+               is_address: bool = False) -> 'Operand':
+        return Operand(OperandType.SYMBOL, name, type_name, is_unsigned, is_address)
 
 
 class Opcode(Enum):
@@ -81,6 +83,7 @@ class Opcode(Enum):
     LOAD = "LOAD"
     STORE = "STORE"
     ALLOCA = "ALLOCA"
+    ADDR = "ADDR"  # взять адрес переменной
 
     # Перемещение
     MOVE = "MOVE"
@@ -240,8 +243,10 @@ class FunctionIR:
     blocks: List[BasicBlock]
     var_types: Dict[str, str]
     temp_counter: int = 0
-    label_counter: int = 0               # новый счётчик для меток
+    label_counter: int = 0
     var_map: Dict[str, Operand] = field(default_factory=dict)
+    is_external: bool = False
+    array_sizes: Dict[str, int] = field(default_factory=dict)   # имя переменной -> размер массива
 
     def new_temp(self, type_name: str = "int", is_unsigned: bool = False) -> Operand:
         self.temp_counter += 1

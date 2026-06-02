@@ -1,9 +1,10 @@
 """Генерация IR из декорированного AST."""
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from src.parser.ast import *
 from src.semantic.symbol_table import SymbolTable, Symbol, SymbolKind
 from src.ir.ir_instructions import *
 from src.lexer.token import TokenType
+from src.semantic.type_system import size_of
 
 
 class IRGenerator:
@@ -14,6 +15,10 @@ class IRGenerator:
         self.program_ir = ProgramIR(functions=[])
         self._current_block: Optional[BasicBlock] = None
         self._loop_stack: List[str] = []
+        self.string_literals = {}  # value -> label
+        self.string_counter = 0
+        self.string_literals = {}  # значение -> метка
+        self.globals: Dict[str, Tuple[str, Optional[Any], Optional[int]]] = {}
 
     def generate(self, program: ProgramNode) -> ProgramIR:
         self.globals = {}
@@ -29,7 +34,8 @@ class IRGenerator:
         init_val = None
         if node.initializer and isinstance(node.initializer, LiteralExprNode):
             init_val = node.initializer.value
-        self.globals[node.name] = (node.type_name, init_val)
+        # Добавляем array_size (None для обычных переменных)
+        self.globals[node.name] = (node.type_name, init_val, node.array_size)
 
     def _add_block(self, label: str) -> BasicBlock:
         block = BasicBlock(label=label)
@@ -53,16 +59,19 @@ class IRGenerator:
                                Opcode.BR_GT, Opcode.BR_GE, Opcode.BR_ULT, Opcode.BR_ULE,
                                Opcode.BR_UGT, Opcode.BR_UGE)
 
-    def _gen_function(self, node: FunctionDeclNode):
-        func_ir = FunctionIR(
-            name=node.name,
-            return_type=node.return_type,
-            parameters=[p.name for p in node.parameters],
-            blocks=[],
-            var_types={}
-        )
+    def _gen_function(self, node: Union[FunctionDeclNode, ExternDeclNode]):
+        # Общие поля
+        name = node.name
+        return_type = node.return_type
+        params = [p.name for p in node.parameters]
+        func_ir = FunctionIR(name=name, return_type=return_type, parameters=params,
+                             blocks=[], var_types={}, is_external=isinstance(node, ExternDeclNode))
         self.current_function = func_ir
         self.program_ir.functions.append(func_ir)
+        if func_ir.is_external:
+            # Для внешней функции ничего больше не делаем
+            self.current_function = None
+            return
         func_ir.var_map = {}
         entry_block = self._add_block("entry")
         self._set_current_block(entry_block)
@@ -113,19 +122,42 @@ class IRGenerator:
 
     def _gen_var_decl(self, node: VarDeclNode):
         if self.current_function:
+            # Локальная переменная
             self.current_function.var_types[node.name] = node.type_name
-            if node.initializer:
-                value = self._gen_expression(node.initializer)
-                if value and value.kind == OperandType.TEMP:
-                    self.current_function.var_map[node.name] = value
+            if node.array_size is not None:
+                # Массив: создаём временную, которая будет хранить адрес массива (помечаем is_address=True)
+                # Тип временной – указатель на элемент
+                temp = self.current_function.new_temp(node.type_name + "*", is_address=True)
+                self.current_function.var_map[node.name] = temp
+                self.current_function.array_sizes[node.name] = node.array_size
+                # Если есть инициализатор – пока игнорируем (можно будет добавить позже)
+                if node.initializer:
+                    # Можно сгенерировать цикл для копирования начальных значений, но для простоты пропустим
+                    pass
+            else:
+                # Обычная переменная
+                if node.initializer:
+                    value = self._gen_expression(node.initializer)
+                    if value and value.kind == OperandType.TEMP:
+                        self.current_function.var_map[node.name] = value
+                    else:
+                        temp = self.current_function.new_temp(node.type_name)
+                        self._emit(Instruction.move(temp, value))
+                        self.current_function.var_map[node.name] = temp
                 else:
                     temp = self.current_function.new_temp(node.type_name)
-                    self._emit(Instruction.move(temp, value))
+                    self._emit(Instruction.move(temp, Operand.const(0, node.type_name)))
                     self.current_function.var_map[node.name] = temp
-            else:
-                temp = self.current_function.new_temp(node.type_name)
-                self._emit(Instruction.move(temp, Operand.const(0, node.type_name)))
-                self.current_function.var_map[node.name] = temp
+        else:
+            # Глобальная переменная – пока не поддерживаем глобальные массивы? Можно, но сложнее.
+            # Для простоты глобальные массивы пропустим или добавим позже.
+            # Регистрируем как обычно, но в кодегене нужно будет выделить место в .bss/.data.
+            # Здесь просто добавим в globals (как в существующем коде).
+            # Для глобального массива размер нужно будет сохранить в отдельном словаре.
+            init_val = None
+            if node.initializer and isinstance(node.initializer, LiteralExprNode):
+                init_val = node.initializer.value
+            self.globals[node.name] = (node.type_name, init_val, node.array_size)  # расширяем кортеж
 
     # ---------- Прямые условные переходы для реляционных выражений ----------
     def _gen_cond_branch(self, expr: ExpressionNode, true_label: str, false_label: str) -> bool:
@@ -290,7 +322,8 @@ class IRGenerator:
         else:
             self._emit(Instruction.ret())
 
-    def _gen_expression(self, expr: ExpressionNode) -> Optional[Operand]:
+    def _gen_expression(self, expr: ExpressionNode, target_node=None) -> Optional[Operand]:
+        # Литералы
         if isinstance(expr, LiteralExprNode):
             if expr.literal_type in (TokenType.INT_LITERAL, TokenType.KW_TRUE, TokenType.KW_FALSE):
                 val = expr.value
@@ -301,19 +334,35 @@ class IRGenerator:
             elif expr.literal_type == TokenType.FLOAT_LITERAL:
                 return Operand.const(expr.value, "float")
             elif expr.literal_type == TokenType.STRING_LITERAL:
-                return Operand.const(expr.value, "string")
+                value = expr.value
+                if value not in self.string_literals:
+                    self.string_counter += 1
+                    label = f"Lstr{self.string_counter}"
+                    self.string_literals[value] = label
+                    self.globals[label] = ("string", value, None)  # (type, init, array_size)
+                return Operand.symbol(self.string_literals[value], "string")
             else:
                 raise NotImplementedError(f"Literal type {expr.literal_type}")
 
+        # Идентификатор (переменная)
         elif isinstance(expr, IdentifierExprNode):
+            # 1. Локальная переменная (включая параметры)
             if self.current_function and expr.name in self.current_function.var_map:
                 return self.current_function.var_map[expr.name]
+            # 2. Глобальная переменная
             sym = self.symbol_table.lookup(expr.name)
-            if sym:
-                is_unsigned = sym.type_name == "unsigned int"
-                return Operand.symbol(expr.name, sym.type_name, is_unsigned=is_unsigned)
-            raise RuntimeError(f"Undeclared variable {expr.name}")
+            if not sym:
+                raise RuntimeError(f"Undeclared identifier '{expr.name}' at {expr.line}:{expr.column}")
+            expr.symbol = sym
+            # Для массива возвращаем адрес (указатель)
+            is_address = (sym.array_size > 0)
+            # Тип для аннотации (не используется в генерации, но может пригодиться)
+            type_ann = sym.type_name + "*" if is_address else sym.type_name
+            expr.type_annotation = type_ann
+            is_unsigned = (sym.type_name == "unsigned int")
+            return Operand.symbol(expr.name, type_ann, is_unsigned=is_unsigned, is_address=is_address)
 
+        # Бинарные операции (арифметика, сравнения, логические)
         elif isinstance(expr, BinaryExprNode):
             if expr.operator in (TokenType.AND, TokenType.OR):
                 return self._gen_logical_expr(expr)
@@ -336,14 +385,15 @@ class IRGenerator:
             op = op_map.get(expr.operator)
             if op is None:
                 raise NotImplementedError(f"Binary operator {expr.operator}")
-            # Для сравнений определяем беззнаковость
             if op in (Opcode.CMP_EQ, Opcode.CMP_NE, Opcode.CMP_LT, Opcode.CMP_LE, Opcode.CMP_GT, Opcode.CMP_GE):
-                is_unsigned = (expr.left.type_annotation == "unsigned int" or expr.right.type_annotation == "unsigned int")
+                is_unsigned = (
+                            expr.left.type_annotation == "unsigned int" or expr.right.type_annotation == "unsigned int")
             else:
                 is_unsigned = (expr.type_annotation == "unsigned int")
             self._emit(Instruction.binary(op, dest, left, right, is_unsigned=is_unsigned))
             return dest
 
+        # Унарные операции
         elif isinstance(expr, UnaryExprNode):
             operand = self._gen_expression(expr.operand)
             if expr.operator in (TokenType.INC_OP, TokenType.DEC_OP):
@@ -365,6 +415,7 @@ class IRGenerator:
             else:
                 raise NotImplementedError(f"Unary operator {expr.operator}")
 
+        # Постфиксные операции
         elif isinstance(expr, PostfixExprNode):
             operand = self._gen_expression(expr.operand)
             old_val = self.current_function.new_temp(expr.type_annotation)
@@ -377,33 +428,66 @@ class IRGenerator:
             self._emit(Instruction.move(operand, new_val))
             return old_val
 
+        # Присваивание (теперь поддерживает как переменные, так и элементы массива)
         elif isinstance(expr, AssignmentExprNode):
+            target_node = expr.target
             value = self._gen_expression(expr.value)
-            if self.current_function and expr.target in self.current_function.var_map:
-                dest = self.current_function.var_map[expr.target]
-            else:
-                sym = self.symbol_table.lookup(expr.target)
-                if sym is None:
-                    raise RuntimeError(f"Undeclared variable {expr.target}")
-                dest = Operand.symbol(expr.target, sym.type_name)
-            if expr.operator != TokenType.ASSIGN:
-                loaded = self.current_function.new_temp(expr.value.type_annotation)
-                self._emit(Instruction.load(loaded, dest))
-                op_map = {
-                    TokenType.ADD_ASSIGN: Opcode.ADD,
-                    TokenType.SUB_ASSIGN: Opcode.SUB,
-                    TokenType.MUL_ASSIGN: Opcode.MUL,
-                    TokenType.DIV_ASSIGN: Opcode.DIV,
-                }
-                op = op_map.get(expr.operator)
-                if op is None:
-                    raise NotImplementedError(f"Compound assign {expr.operator}")
-                temp = self.current_function.new_temp(expr.type_annotation)
-                self._emit(Instruction.binary(op, temp, loaded, value))
-                value = temp
-            self._emit(Instruction.move(dest, value))
-            return value
+            if isinstance(expr.target, IdentifierExprNode):
+                # Присваивание переменной
+                target_name = expr.target.name
+                if self.current_function and target_name in self.current_function.var_map:
+                    dest = self.current_function.var_map[target_name]
+                else:
+                    sym = self.symbol_table.lookup(target_name)
+                    if sym is None:
+                        raise RuntimeError(f"Undeclared variable {target_name}")
+                    dest = Operand.symbol(target_name, sym.type_name)
+                # Составные присваивания
+                if expr.operator != TokenType.ASSIGN:
+                    loaded = self.current_function.new_temp(expr.value.type_annotation)
+                    self._emit(Instruction.load(loaded, dest))
+                    op_map = {
+                        TokenType.ADD_ASSIGN: Opcode.ADD,
+                        TokenType.SUB_ASSIGN: Opcode.SUB,
+                        TokenType.MUL_ASSIGN: Opcode.MUL,
+                        TokenType.DIV_ASSIGN: Opcode.DIV,
+                    }
+                    op = op_map.get(expr.operator)
+                    if op is None:
+                        raise NotImplementedError(f"Compound assign {expr.operator}")
+                    temp = self.current_function.new_temp(expr.type_annotation)
+                    self._emit(Instruction.binary(op, temp, loaded, value))
+                    value = temp
+                self._emit(Instruction.move(dest, value))
+                return value
 
+            elif isinstance(expr.target, ArrayAccessExprNode):
+                # Присваивание элементу массива
+                base = self._gen_expression(expr.target.array)
+                index = self._gen_expression(expr.target.index)
+                elem_type = expr.target.type_annotation
+                elem_size = size_of(elem_type)  # нужно импортировать
+                offset_temp = self.current_function.new_temp("int")
+                self._emit(Instruction.binary(Opcode.MUL, offset_temp, index, Operand.const(elem_size, "int")))
+                addr_temp = self.current_function.new_temp(elem_type + "*")
+                self._emit(Instruction.binary(Opcode.ADD, addr_temp, base, offset_temp))
+                self._emit(Instruction.store(addr_temp, value))
+                return value
+
+            elif isinstance(target_node, DerefExprNode):
+                # *ptr = value
+                addr = self._gen_expression(target_node.operand)
+                value = self._gen_expression(expr.value)
+                # для простоты поддерживаем только =
+                if expr.operator != TokenType.ASSIGN:
+                    raise NotImplementedError("Compound assignment for pointer dereference")
+                self._emit(Instruction.store(addr, value))
+                return value
+
+            else:
+                raise RuntimeError(f"Invalid assignment target: {type(expr.target)}")
+
+        # Вызов функции
         elif isinstance(expr, CallExprNode):
             func_sym = self.symbol_table.lookup(expr.callee)
             if not func_sym or func_sym.kind != SymbolKind.FUNCTION:
@@ -418,6 +502,45 @@ class IRGenerator:
             else:
                 self._emit(Instruction.call(None, expr.callee, arg_ops))
                 return None
+
+        # Взятие адреса (&)
+        elif isinstance(expr, AddressOfExprNode):
+            if not isinstance(expr.operand, IdentifierExprNode):
+                return None
+            var_name = expr.operand.name
+            if self.current_function and var_name in self.current_function.var_map:
+                var_temp = self.current_function.var_map[var_name]
+                dest = self.current_function.new_temp(expr.type_annotation)
+                self._emit(Instruction(Opcode.ADDR, dest=dest, src1=var_temp, comment=f"address of {var_name}"))
+                return dest
+            else:
+                sym = Operand.symbol(var_name, expr.type_annotation)
+                dest = self.current_function.new_temp(expr.type_annotation)
+                self._emit(Instruction(Opcode.ADDR, dest=dest, src1=sym, comment=f"address of global {var_name}"))
+                return dest
+
+        # Разыменование (*)
+        elif isinstance(expr, DerefExprNode):
+            addr = self._gen_expression(expr.operand)
+            if addr is None:
+                return None
+            dest = self.current_function.new_temp(expr.type_annotation)
+            self._emit(Instruction.load(dest, addr))
+            return dest
+
+        # Доступ к элементу массива (чтение)
+        elif isinstance(expr, ArrayAccessExprNode):
+            base = self._gen_expression(expr.array)  # адрес массива (is_address=True для глобальных массивов)
+            index = self._gen_expression(expr.index)
+            elem_type = expr.type_annotation
+            elem_size = size_of(elem_type)
+            offset_temp = self.current_function.new_temp("int")
+            self._emit(Instruction.binary(Opcode.MUL, offset_temp, index, Operand.const(elem_size, "int")))
+            addr_temp = self.current_function.new_temp(elem_type + "*")
+            self._emit(Instruction.binary(Opcode.ADD, addr_temp, base, offset_temp))
+            dest = self.current_function.new_temp(elem_type)
+            self._emit(Instruction.load(dest, addr_temp))
+            return dest
 
         else:
             raise NotImplementedError(f"Expression type {type(expr)}")

@@ -27,6 +27,7 @@ class Scanner:
             "fn": TokenType.KW_FN,
             "var": TokenType.KW_VAR,
             "unsigned": TokenType.KW_UNSIGNED,
+            "extern": TokenType.KW_EXTERN,
         }
 
         # Карта двухсимвольных операторов (для справки, не используется напрямую)
@@ -231,7 +232,7 @@ class Scanner:
             if self.peek() == '&':
                 self.advance()
                 return self._make_token(TokenType.AND)
-            return self._error_token(f"Unexpected character '{ch}' (did you mean '&&'?)")
+            return self._make_token(TokenType.AMP)  # одиночный амперсанд
 
         if ch == '|':
             if self.peek() == '|':

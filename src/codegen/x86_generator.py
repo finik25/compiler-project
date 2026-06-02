@@ -9,20 +9,69 @@ class X86Generator:
         self.enable_regalloc = enable_regalloc
         self.current_func: Optional[FunctionIR] = None
         self.stack_mgr: Optional[StackFrameManager] = None
+        self.callee_saved = ['rbx', 'r12', 'r13', 'r14', 'r15']
 
     def generate(self, program: ProgramIR, globals: dict = None) -> str:
         lines = []
-        if globals:
-            lines.append("section .data")
-            for name, (typ, init) in globals.items():
-                if init is not None:
-                    lines.append(f"    {name}: dq {init}")
-            lines.append("section .bss")
-            for name, (typ, init) in globals.items():
-                if init is None:
-                    lines.append(f"    {name}: resq 1")
+        externs = set()
+        for func in program.functions:
+            if hasattr(func, 'is_external') and func.is_external:
+                externs.add(func.name)
+
+        # Строковые литералы (секция .rodata)
+        if hasattr(self, 'string_literals') and self.string_literals:
+            lines.append("section .rodata")
+            for value, label in self.string_literals.items():
+                escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+                lines.append(f'    {label}: db "{escaped}", 0')
             lines.append("")
+
+        # Секции данных для глобальных переменных
+        if globals:
+            rodata_lines = []
+            data_lines = []
+            bss_lines = []
+            for name, info in globals.items():
+                typ, init_val, array_size = info
+                if typ == "string":
+                    escaped = init_val.replace('\\', '\\\\').replace('"', '\\"')
+                    rodata_lines.append(f'    {name}: db "{escaped}", 0')
+                elif array_size is not None:
+                    elem_size = 4 if typ in ("int", "unsigned int", "bool") else 8
+                    total_bytes = array_size * elem_size
+                    if init_val is not None:
+                        data_lines.append(f"    {name}: times {total_bytes} db 0")
+                    else:
+                        bss_lines.append(f"    {name}: resb {total_bytes}")
+                else:
+                    if init_val is not None:
+                        data_lines.append(f"    {name}: dq {init_val}")
+                    else:
+                        bss_lines.append(f"    {name}: resq 1")
+            if rodata_lines:
+                lines.append("section .rodata")
+                lines.extend(rodata_lines)
+                lines.append("")
+            if data_lines:
+                lines.append("section .data")
+                lines.extend(data_lines)
+                lines.append("")
+            if bss_lines:
+                lines.append("section .bss")
+                lines.extend(bss_lines)
+                lines.append("")
+
+        # Добавляем extern для вызванных стандартных функций
+        for func in program.functions:
+            for block in func.blocks:
+                for instr in block.instructions:
+                    if instr.opcode == Opcode.CALL and instr.label in ('printf', 'scanf', 'malloc', 'free'):
+                        externs.add(instr.label)
+
+        # Текстовая секция
         lines.append("section .text")
+        for ext in externs:
+            lines.append(f"extern {ext}")
         lines.append("global main")
         lines.append("")
 
@@ -35,39 +84,55 @@ class X86Generator:
         return "\n".join(lines)
 
     def _gen_function(self, func: FunctionIR) -> List[str]:
-        self.current_func = func
+        if func.is_external:
+            return []   # внешние функции не генерируем
+
+        # Инициализация StackFrameManager для текущей функции
         self.stack_mgr = StackFrameManager(func)
         self.stack_mgr.allocate()
+        self.current_func = func
 
         lines = []
         lines.append(f"{func.name}:")
         lines.append("    push rbp")
         lines.append("    mov rbp, rsp")
+
+        # Сохраняем callee-saved регистры
+        for reg in self.callee_saved:
+            lines.append(f"    push {reg}")
+
+        # Выравнивание стека до 16 байт (добавляем 8 байт)
+        lines.append("    sub rsp, 8")
+        # Выделяем память для локальных переменных
         lines.append(f"    sub rsp, {self.stack_mgr.total_size}")
 
+        # Сохраняем параметры функции в стек
         param_regs = ARG_REGS[:len(func.parameters)]
         for idx, param_name in enumerate(func.parameters):
             temp_op = func.var_map.get(param_name)
             if temp_op and temp_op.kind == OperandType.TEMP:
-                temp_index = temp_op.value
-                offset = self.stack_mgr.get_temp_offset(temp_index)
+                offset = self.stack_mgr.get_temp_offset(temp_op.value)
                 reg = param_regs[idx] if idx < len(param_regs) else None
                 if reg:
                     lines.append(f"    mov [rbp{offset:+d}], {reg}")
 
+        # Генерация инструкций для всех блоков
         for block in func.blocks:
             lines.append(f".{block.label}:")
             for instr in block.instructions:
                 lines.extend(self._gen_instruction(instr))
 
+        # Если в функции нет ни одной инструкции RETURN, добавляем эпилог
         has_return = any(
             instr.opcode == Opcode.RETURN
             for blk in func.blocks
             for instr in blk.instructions
         )
         if not has_return:
-            lines.append(".epilogue:")
-            lines.append("    mov rsp, rbp")
+            lines.append(f"    add rsp, {self.stack_mgr.total_size}")
+            lines.append("    add rsp, 8")
+            for reg in reversed(self.callee_saved):
+                lines.append(f"    pop {reg}")
             lines.append("    pop rbp")
             lines.append("    ret")
         return lines
@@ -91,17 +156,55 @@ class X86Generator:
             lines.extend(self._gen_jump_cond(instr.src1, instr.label, True))
         elif instr.opcode == Opcode.JUMP_IF_NOT:
             lines.extend(self._gen_jump_cond(instr.src1, instr.label, False))
-        # Прямые условные переходы
         elif instr.opcode in (Opcode.BR_EQ, Opcode.BR_NE, Opcode.BR_LT, Opcode.BR_LE,
                               Opcode.BR_GT, Opcode.BR_GE, Opcode.BR_ULT, Opcode.BR_ULE,
                               Opcode.BR_UGT, Opcode.BR_UGE):
             lines.extend(self._gen_cond_branch(instr))
         elif instr.opcode == Opcode.CALL:
             lines.extend(self._gen_call(instr))
+        elif instr.opcode == Opcode.LOAD:
+            # src1 – временная, содержащая адрес
+            lines = []
+            # Загружаем адрес в rax
+            lines.extend(self._gen_load_into_reg(instr.src1, 'rax'))
+            # Читаем значение по адресу
+            lines.append(f"    mov rax, [rax]")
+            # Сохраняем в dest
+            dest_offset = self.stack_mgr.get_temp_offset(instr.dest.value)
+            lines.append(f"    mov [rbp{dest_offset:+d}], rax")
+            return lines
+        elif instr.opcode == Opcode.STORE:
+            # src1 – адрес (куда писать), src2 – значение
+            lines = []
+            lines.extend(self._gen_load_into_reg(instr.src1, 'rax'))
+            lines.extend(self._gen_load_into_reg(instr.src2, 'rbx'))
+            lines.append(f"    mov [rax], rbx")
+            return lines
+        elif instr.opcode == Opcode.ADDR:
+            # dest = адрес src1 (переменной)
+            lines = []
+            # Загружаем адрес в rax
+            if instr.src1.kind == OperandType.TEMP:
+                # Локальная переменная – берём её смещение из stack_mgr
+                offset = self.stack_mgr.get_temp_offset(instr.src1.value)
+                lines.append(f"    lea rax, [rbp{offset:+d}]")
+            elif instr.src1.kind == OperandType.SYMBOL:
+                # Глобальная переменная – адрес через mov
+                lines.append(f"    mov rax, {instr.src1.value}")
+            else:
+                raise NotImplementedError(f"ADDR source type {instr.src1.kind}")
+            # Сохраняем адрес в dest (временную)
+            dest_offset = self.stack_mgr.get_temp_offset(instr.dest.value)
+            lines.append(f"    mov [rbp{dest_offset:+d}], rax")
+            return lines
         elif instr.opcode == Opcode.RETURN:
             if instr.src1:
-                lines.extend(self._gen_load_into_reg(instr.src1, RET_REG))
-            lines.append("    mov rsp, rbp")
+                lines.extend(self._gen_load_into_reg(instr.src1, 'rax'))
+            # Эпилог: освобождаем локальные переменные, убираем выравнивание, восстанавливаем регистры
+            lines.append(f"    add rsp, {self.stack_mgr.total_size}")
+            lines.append("    add rsp, 8")
+            for reg in reversed(self.callee_saved):
+                lines.append(f"    pop {reg}")
             lines.append("    pop rbp")
             lines.append("    ret")
         return lines
@@ -208,25 +311,56 @@ class X86Generator:
     def _gen_call(self, instr: Instruction) -> List[str]:
         lines = []
         args = instr.args
-        arg_regs_list = ARG_REGS[:len(args)]
+        num_int_args = len(args)
+        regs = ARG_REGS  # 6 регистров
+        # Определяем, сколько аргументов пойдёт на стек
+        stack_args_count = max(0, num_int_args - len(regs))
+        # Выделяем место на стеке
+        stack_bytes = stack_args_count * 8
+        if stack_bytes:
+            lines.append(f"    sub rsp, {stack_bytes}")
+        # Загружаем регистровые аргументы
         for i, arg in enumerate(args):
-            if i < len(arg_regs_list):
-                lines.extend(self._gen_load_into_reg(arg, arg_regs_list[i]))
+            if i < len(regs):
+                lines.extend(self._gen_load_into_reg(arg, regs[i]))
+        # Записываем стековые аргументы (с конца списка, чтобы правый был ближе к вершине)
+        for i in range(stack_args_count):
+            arg_idx = num_int_args - stack_args_count + i
+            arg = args[arg_idx]
+            offset = i * 8
+            lines.extend(self._gen_load_into_reg(arg, 'rax'))
+            lines.append(f"    mov [rsp+{offset}], rax")
+        # Вариадическая функция: al = 0
+        if instr.label in ('printf', 'scanf'):
+            lines.append("    xor eax, eax")
         lines.append(f"    call {instr.label}")
+        if stack_bytes:
+            lines.append(f"    add rsp, {stack_bytes}")
         if instr.dest and instr.dest.kind == OperandType.TEMP:
             offset = self.stack_mgr.get_temp_offset(instr.dest.value)
             lines.append(f"    mov [rbp{offset:+d}], rax")
         return lines
 
     def _gen_load_into_reg(self, op: Operand, reg: str) -> List[str]:
+        if not isinstance(op, Operand):
+            raise TypeError(f"Expected Operand, got {type(op)}: {op}")
         lines = []
         if op.kind == OperandType.CONST:
             lines.append(f"    mov {reg}, {op.value}")
         elif op.kind == OperandType.TEMP:
-            offset = self.stack_mgr.get_temp_offset(op.value)
-            lines.append(f"    mov {reg}, [rbp{offset:+d}]")
+            if op.is_address:
+                offset = self.stack_mgr.get_temp_offset(op.value)
+                lines.append(f"    lea {reg}, [rbp{offset:+d}]")
+            else:
+                offset = self.stack_mgr.get_temp_offset(op.value)
+                lines.append(f"    mov {reg}, [rbp{offset:+d}]")
+        elif op.kind == OperandType.SYMBOL and op.type_name == "string":
+            lines.append(f"    lea {reg}, [rel {op.value}]")
         elif op.kind == OperandType.SYMBOL:
-            lines.append(f"    mov {reg}, [rel {op.value}]")
+            if op.is_address:
+                lines.append(f"    mov {reg}, {op.value}")
+            else:
+                lines.append(f"    mov {reg}, [rel {op.value}]")
         elif op.kind == OperandType.LABEL:
             lines.append(f"    mov {reg}, .{op.value}")
         return lines

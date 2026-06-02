@@ -1,0 +1,13 @@
+extern fn malloc(int size) -> int*;
+extern fn free(int* ptr);
+
+fn main() -> int {
+    int* p = malloc(4);
+    if (p == 0) {
+        return 1;
+    }
+    *p = 42;
+    int val = *p;
+    free(p);
+    return val;
+}

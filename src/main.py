@@ -49,6 +49,10 @@ def main():
     ir_parser.add_argument("--format", choices=["text", "dot", "json"], default="text", help="IR output format")
     ir_parser.add_argument("--stats", action="store_true", help="Show IR statistics")
     ir_parser.add_argument("--verbose", action="store_true", help="Show additional info")
+    ir_parser.add_argument("--optimize", action="store_true",
+                           help="Enable IR optimizations")
+    ir_parser.add_argument("--no-regalloc", action="store_true",
+                           help="Ignored for IR generation (compatibility with compile command)")
 
     # Compile command
     compile_parser = subparsers.add_parser("compile", help="Generate x86-64 assembly and executable")
@@ -58,6 +62,9 @@ def main():
                                 help="Disable register allocation (use stack only)")
     compile_parser.add_argument("--run", action="store_true",
                                 help="Assemble, link and run the program (requires nasm and ld)")
+    compile_parser.add_argument("--optimize", action="store_true",
+                                help="Enable IR optimizations")
+    compile_parser.add_argument("--verbose", action="store_true", help="Show verbose output")
 
     args = parser.parse_args()
 
@@ -331,6 +338,14 @@ def main():
         ir_gen = IRGenerator(symtable)
         program_ir = ir_gen.generate(ast)
         globals_dict = ir_gen.globals
+
+        if args.optimize:
+            from src.ir.optimizer import IROptimizer
+            optimizer = IROptimizer()
+            program_ir = optimizer.optimize(program_ir)
+            if args.verbose:
+                print("Optimizations applied", file=sys.stderr)
+
         # Генерация ассемблера
         from src.codegen import X86Generator
         gen = X86Generator(enable_regalloc=not args.no_regalloc)

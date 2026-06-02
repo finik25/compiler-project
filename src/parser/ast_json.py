@@ -103,8 +103,9 @@ class ASTJSONGenerator:
             result["callee"] = node.callee
             result["arguments"] = [self._to_dict(a) for a in node.arguments]
 
+
         elif isinstance(node, AssignmentExprNode):
-            result["target"] = node.target
+            result["target"] = self._to_dict(node.target)  # вместо node.target как строки
             result["operator"] = node.operator.name
             result["value"] = self._to_dict(node.value)
 

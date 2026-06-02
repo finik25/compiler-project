@@ -1,6 +1,5 @@
 from src.parser.ast import *
 
-
 def _operator_symbol(op_type: TokenType) -> str:
     """Возвращает строковое представление оператора для унарных и постфиксных операций."""
     if op_type == TokenType.MINUS:
@@ -12,7 +11,7 @@ def _operator_symbol(op_type: TokenType) -> str:
     elif op_type == TokenType.DEC_OP:
         return "--"
     else:
-        return op_type.name  # fallback (не должно случиться)
+        return op_type.name
 
 
 class ASTPrinter:
@@ -21,8 +20,11 @@ class ASTPrinter:
     def __init__(self, verbose=False):
         self.verbose = verbose
 
+    # ----------------------------------------------------------------------
+    # Print text without type annotations (for parser tests)
+    # ----------------------------------------------------------------------
     def print_text(self, node: ASTNode, indent: int = 0) -> str:
-        """Return a text representation of the AST."""
+        """Return a text representation of the AST (no type annotations)."""
         result = []
         indent_str = "  " * indent
 
@@ -116,11 +118,9 @@ class ASTPrinter:
             right = self.print_text(node.right, 0)
             result.append(f"{indent_str}({left} {node.operator.name} {right})")
 
-
         elif isinstance(node, UnaryExprNode):
             op_str = _operator_symbol(node.operator)
             result.append(f"{indent_str}({op_str}{self.print_text(node.operand, 0)})")
-
 
         elif isinstance(node, PostfixExprNode):
             op_str = _operator_symbol(node.operator)
@@ -131,13 +131,32 @@ class ASTPrinter:
             result.append(f"{indent_str}{node.callee}({args})")
 
         elif isinstance(node, AssignmentExprNode):
-            result.append(f"{indent_str}({node.target} {node.operator.name} {self.print_text(node.value, 0)})")
+            target_str = self.print_text(node.target, 0)
+            result.append(f"{indent_str}({target_str} {node.operator.name} {self.print_text(node.value, 0)})")
+
+        elif isinstance(node, AddressOfExprNode):
+            result.append(f"{indent_str}&{self.print_text(node.operand, 0)}")
+
+        elif isinstance(node, DerefExprNode):
+            result.append(f"{indent_str}*{self.print_text(node.operand, 0)}")
+
+        elif isinstance(node, ArrayAccessExprNode):
+            array_str = self.print_text(node.array, 0)
+            index_str = self.print_text(node.index, 0)
+            result.append(f"{indent_str}{array_str}[{index_str}]")
+
+        elif isinstance(node, ExternDeclNode):
+            params = ", ".join(f"{p.type_name} {p.name}" for p in node.parameters)
+            result.append(f"{indent_str}ExternDecl: {node.name}({params}) -> {node.return_type}")
 
         else:
             result.append(f"{indent_str}<unknown node {type(node).__name__}>")
 
         return "\n".join(result)
 
+    # ----------------------------------------------------------------------
+    # Print decorated AST with type annotations (for semantic analyzer)
+    # ----------------------------------------------------------------------
     def print_decorated(self, node: ASTNode, indent: int = 0) -> str:
         result = []
         indent_str = "  " * indent
@@ -205,27 +224,46 @@ class ASTPrinter:
         elif isinstance(node, EmptyStmtNode):
             result.append(f"{indent_str}EmptyStmt")
         elif isinstance(node, LiteralExprNode):
-            result.append(f"{indent_str}{repr(node.value)} [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}{repr(node.value)} [{typ}]")
         elif isinstance(node, IdentifierExprNode):
-            result.append(f"{indent_str}{node.name} [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}{node.name} [{typ}]")
         elif isinstance(node, BinaryExprNode):
             left = self.print_decorated(node.left, 0)
             right = self.print_decorated(node.right, 0)
-            result.append(f"{indent_str}({left} {node.operator.name} {right}) [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}({left} {node.operator.name} {right}) [{typ}]")
         elif isinstance(node, UnaryExprNode):
             op_str = _operator_symbol(node.operator)
-            result.append(
-                f"{indent_str}({op_str}{self.print_decorated(node.operand, 0)}) [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}({op_str}{self.print_decorated(node.operand, 0)}) [{typ}]")
         elif isinstance(node, PostfixExprNode):
             op_str = _operator_symbol(node.operator)
-            result.append(
-                f"{indent_str}({self.print_decorated(node.operand, 0)}{op_str}) [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}({self.print_decorated(node.operand, 0)}{op_str}) [{typ}]")
         elif isinstance(node, CallExprNode):
             args = ", ".join(self.print_decorated(a, 0) for a in node.arguments)
-            result.append(f"{indent_str}{node.callee}({args}) [{node.type_annotation or '?'}]")
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}{node.callee}({args}) [{typ}]")
         elif isinstance(node, AssignmentExprNode):
-            result.append(
-                f"{indent_str}({node.target} {node.operator.name} {self.print_decorated(node.value, 0)}) [{node.type_annotation or '?'}]")
+            target_str = self.print_decorated(node.target, 0)
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}({target_str} {node.operator.name} {self.print_decorated(node.value, 0)}) [{typ}]")
+        elif isinstance(node, AddressOfExprNode):
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}&{self.print_decorated(node.operand, 0)} [{typ}]")
+        elif isinstance(node, DerefExprNode):
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}*{self.print_decorated(node.operand, 0)} [{typ}]")
+        elif isinstance(node, ArrayAccessExprNode):
+            array_str = self.print_decorated(node.array, 0)
+            index_str = self.print_decorated(node.index, 0)
+            typ = getattr(node, 'type_annotation', '?')
+            result.append(f"{indent_str}{array_str}[{index_str}] [{typ}]")
+        elif isinstance(node, ExternDeclNode):
+            params = ", ".join(f"{p.type_name} {p.name}" for p in node.parameters)
+            result.append(f"{indent_str}ExternDecl: {node.name}({params}) -> {node.return_type}")
         else:
             result.append(f"{indent_str}<unknown node {type(node).__name__}>")
         return "\n".join(result)
